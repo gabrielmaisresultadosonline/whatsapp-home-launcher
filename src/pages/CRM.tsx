@@ -2319,6 +2319,9 @@ const CRM = () => {
 
  
         let settingsData = null;
+        // Marca o início da leitura: se um Salvar acontecer enquanto esta
+        // requisição está no ar, a resposta é obsoleta e não pode ser aplicada.
+        const settingsFetchStartedAt = Date.now();
         const { data: cloudSettings, error: cloudSettingsError } = await supabase.functions.invoke('meta-whatsapp-crm', {
           body: { action: 'getCloudSettings' }
         });
@@ -2335,13 +2338,22 @@ const CRM = () => {
           settingsData = directSettings;
         }
  
-       if (settingsData) {
+       const settingsStale = settingsSavedAtRef.current > settingsFetchStartedAt;
+       if (settingsData && settingsStale) {
+         console.info('[CRM] Configurações recebidas são anteriores ao último salvamento; ignoradas para não sobrescrever o que foi salvo.');
+       }
+       if (settingsData && !settingsStale) {
          const loadedKey = String(settingsData.openai_api_key || '').trim();
-         if (validatedOpenAiKeyRef.current?.key !== loadedKey) {
+         const draftKey = openAiKeyDraftRef.current;
+         // Se o usuário está editando a chave, o rascunho vence o valor do banco.
+         const effectiveKey = draftKey !== null ? draftKey : loadedKey;
+         if (validatedOpenAiKeyRef.current?.key !== effectiveKey.trim()) {
            validatedOpenAiKeyRef.current = null;
            setOpenAiKeyCheck({ state: 'idle' });
          }
-         setMetaSettings(settingsData);
+         setMetaSettings(
+           draftKey !== null ? { ...settingsData, openai_api_key: draftKey } : settingsData
+         );
          setWhatsAppConnectionConfirmed(!!(settingsData.meta_access_token && settingsData.meta_phone_number_id && settingsData.meta_waba_id));
        }
  
