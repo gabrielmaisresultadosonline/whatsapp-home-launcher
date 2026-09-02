@@ -2469,6 +2469,7 @@ const CRM = () => {
       try {
       console.info('[AI-KEY] Validando token sem expor seu conteúdo.', {
         length: normalizedKey.length,
+        suffix: normalizedKey.slice(-4),
       });
       const { data, error } = await supabase.functions.invoke('meta-whatsapp-crm', {
         body: { action: 'validateOpenAiKey', api_key: normalizedKey },
