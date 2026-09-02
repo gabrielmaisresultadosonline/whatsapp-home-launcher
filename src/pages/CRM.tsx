@@ -447,6 +447,14 @@ const CRM = () => {
     message?: string;
     detail?: string;
   }>({ state: 'idle' });
+  const validatedOpenAiKeyRef = useRef<{
+    key: string;
+    result: { valid: boolean; message: string; detail?: string };
+  } | null>(null);
+  const openAiValidationInFlightRef = useRef<{
+    key: string;
+    promise: Promise<{ valid: boolean; message: string; detail?: string }>;
+  } | null>(null);
 
   const [bizWarnExpanded, setBizWarnExpanded] = useState(false);
   const [expiredWindowDialog, setExpiredWindowDialog] = useState(false);
@@ -2319,6 +2327,11 @@ const CRM = () => {
         }
  
        if (settingsData) {
+         const loadedKey = String(settingsData.openai_api_key || '').trim();
+         if (validatedOpenAiKeyRef.current?.key !== loadedKey) {
+           validatedOpenAiKeyRef.current = null;
+           setOpenAiKeyCheck({ state: 'idle' });
+         }
          setMetaSettings(settingsData);
          setWhatsAppConnectionConfirmed(!!(settingsData.meta_access_token && settingsData.meta_phone_number_id && settingsData.meta_waba_id));
        }
@@ -2417,10 +2430,27 @@ const CRM = () => {
     apiKey: string,
     opts: { silent?: boolean } = {}
   ): Promise<{ valid: boolean; message: string; detail?: string }> => {
+    const normalizedKey = apiKey.trim();
+    const cached = validatedOpenAiKeyRef.current;
+    if (cached?.key === normalizedKey && cached.result.valid) {
+      setOpenAiKeyCheck({ state: 'valid', code: 'ok', message: cached.result.message });
+      return cached.result;
+    }
+
+    const inFlight = openAiValidationInFlightRef.current;
+    if (inFlight?.key === normalizedKey) {
+      console.info('[AI-KEY] Validação já está em andamento; reutilizando a mesma requisição.');
+      return inFlight.promise;
+    }
+
     setOpenAiKeyCheck({ state: 'checking' });
-    try {
+    const validationPromise = (async () => {
+      try {
+      console.info('[AI-KEY] Validando token sem expor seu conteúdo.', {
+        length: normalizedKey.length,
+      });
       const { data, error } = await supabase.functions.invoke('meta-whatsapp-crm', {
-        body: { action: 'validateOpenAiKey', api_key: apiKey },
+        body: { action: 'validateOpenAiKey', api_key: normalizedKey },
       });
       if (error) throw error;
 
@@ -2430,6 +2460,15 @@ const CRM = () => {
       const detail = data?.provider_message ? String(data.provider_message) : undefined;
 
       setOpenAiKeyCheck({ state: valid ? 'valid' : 'invalid', code, message, detail });
+      if (valid) {
+        validatedOpenAiKeyRef.current = {
+          key: normalizedKey,
+          result: { valid, message, detail },
+        };
+      } else {
+        validatedOpenAiKeyRef.current = null;
+      }
+      console.info('[AI-KEY] Validação concluída.', { valid, code: code || 'sem_codigo' });
 
       if (!opts.silent) {
         toast({
@@ -2451,7 +2490,15 @@ const CRM = () => {
         toast({ title: 'Falha ao validar a API', description: message, variant: 'destructive' });
       }
       return { valid: false, message, detail: err?.message };
-    }
+      } finally {
+        if (openAiValidationInFlightRef.current?.key === normalizedKey) {
+          openAiValidationInFlightRef.current = null;
+        }
+      }
+    })();
+
+    openAiValidationInFlightRef.current = { key: normalizedKey, promise: validationPromise };
+    return validationPromise;
   };
 
    const handleSaveSettings = async (customSettings?: any) => {
@@ -2491,6 +2538,11 @@ const CRM = () => {
          const rest: Record<string, any> = {};
          for (const col of ALLOWED_COLUMNS) {
            if (targetSettings[col] !== undefined) rest[col] = targetSettings[col];
+         }
+         // A OpenAI rejeita espaços/quebras de linha no Bearer token. A mesma
+         // forma canônica validada deve ser a forma persistida e usada pelo agente.
+         if (typeof rest.openai_api_key === 'string') {
+           rest.openai_api_key = rest.openai_api_key.trim();
          }
          // Normaliza FKs vazias para null (evita violar FK)
          if (rest.initial_flow_id === '') rest.initial_flow_id = null;
@@ -7871,11 +7923,20 @@ const CRM = () => {
                                 placeholder="sk-..."
                                 value={metaSettings.openai_api_key}
                                 onChange={(e) => {
+                                  if (validatedOpenAiKeyRef.current?.key !== e.target.value.trim()) {
+                                    validatedOpenAiKeyRef.current = null;
+                                  }
                                   setMetaSettings({...metaSettings, openai_api_key: e.target.value});
                                   setOpenAiKeyCheck({ state: 'idle' });
                                 }}
                                 onBlur={(e) => {
                                   const value = e.target.value.trim();
+                                  if (value !== e.target.value) {
+                                    setMetaSettings((previous: typeof metaSettings) => ({
+                                      ...previous,
+                                      openai_api_key: value,
+                                    }));
+                                  }
                                   if (value) void validateOpenAiKey(value, { silent: true });
                                 }}
                               />
@@ -7944,7 +8005,7 @@ const CRM = () => {
                                   const key = String(metaSettings.openai_api_key || '').trim();
                                   const check = await validateOpenAiKey(key);
                                   if (!check.valid) return;
-                                  await handleSaveSettings();
+                                   await handleSaveSettings({ ...metaSettings, openai_api_key: key });
                                 }}
                                 disabled={saving || openAiKeyCheck.state === 'checking'}
                                 size="sm"

@@ -3,7 +3,7 @@
 # =============================================================
 # Script de Instalação Automática - I.A MRO
 # Para Ubuntu LTS (VPS Hostinger)
-# Repositório: https://github.com/gabrielmaisresultadosonline/instaboost-mro.git
+# Repositório: https://github.com/gabrielmaisresultadosonline/whatsapp-home-launcher.git
 # Domínio: zapmro.com.br
 # =============================================================
 
@@ -21,7 +21,7 @@ NC='\033[0m' # No Color
 APP_NAME="ia-mro"
 APP_DIR="/var/www/$APP_NAME"
 DOMAIN="${1:-zapmro.com.br}"
-REPO_URL="https://github.com/gabrielmaisresultadosonline/zapmro-crm-whatsapp-profissional.git"
+REPO_URL="https://github.com/gabrielmaisresultadosonline/whatsapp-home-launcher.git"
 
 echo -e "${YELLOW}Atualizando sistema...${NC}"
 sudo apt update && sudo apt upgrade -y
@@ -47,6 +47,12 @@ cd /var/www
 echo -e "${YELLOW}Clonando/Atualizando repositório...${NC}"
 if [ -d "$APP_NAME" ]; then
     cd $APP_NAME
+    CURRENT_ORIGIN="$(git remote get-url origin 2>/dev/null || true)"
+    if [ "$CURRENT_ORIGIN" != "$REPO_URL" ]; then
+        echo -e "${YELLOW}Alterando origin para o novo repositório...${NC}"
+        git remote set-url origin "$REPO_URL"
+    fi
+    echo -e "${GREEN}Origin atual: $(git remote get-url origin)${NC}"
     git fetch origin
     git reset --hard origin/main
 else

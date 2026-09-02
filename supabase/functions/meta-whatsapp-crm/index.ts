@@ -6750,7 +6750,18 @@ async function fetchAndStoreIncomingMedia(
      * lá no webhook (401 invalid_api_key), invisível para o usuário.
      */
     if (action === 'validateOpenAiKey') {
-      const rawKey = String(params?.api_key ?? '').trim();
+      const submittedKey = String(params?.api_key ?? '').trim();
+      const looksMasked = /[*•]/.test(submittedKey) || /^sk-[.]{3,}/i.test(submittedKey);
+      const persistedKey = String(settings?.openai_api_key ?? '').trim();
+      const rawKey = looksMasked && persistedKey ? persistedKey : submittedKey;
+      const keySource = looksMasked && persistedKey ? 'persisted' : 'submitted';
+
+      console.log('[AI-KEY-VALIDATION] Solicitação recebida', {
+        user_id: userId,
+        source: keySource,
+        length: rawKey.length,
+        reused_persisted_key: keySource === 'persisted',
+      });
 
       if (!rawKey) {
         return jsonResponse({
@@ -6808,6 +6819,11 @@ async function fetchAndStoreIncomingMedia(
         if (!check.ok) {
           const body = await check.json().catch(() => ({} as any));
           const mapped = mapOpenAiError(check.status, body);
+          console.warn('[AI-KEY-VALIDATION] Consulta de modelo recusada', {
+            user_id: userId,
+            status: check.status,
+            code: mapped.code,
+          });
           return jsonResponse({
             success: true,
             valid: false,
@@ -6837,6 +6853,10 @@ async function fetchAndStoreIncomingMedia(
         });
 
         if (probe.ok) {
+          console.log('[AI-KEY-VALIDATION] Token válido e com saldo', {
+            user_id: userId,
+            model: 'gpt-4o-mini',
+          });
           return jsonResponse({
             success: true,
             valid: true,
@@ -6847,6 +6867,11 @@ async function fetchAndStoreIncomingMedia(
 
         const probeBody = await probe.json().catch(() => ({} as any));
         const mapped = mapOpenAiError(probe.status, probeBody);
+        console.warn('[AI-KEY-VALIDATION] Teste de saldo/modelo recusado', {
+          user_id: userId,
+          status: probe.status,
+          code: mapped.code,
+        });
         return jsonResponse({
           success: true,
           valid: false,
@@ -6856,6 +6881,10 @@ async function fetchAndStoreIncomingMedia(
           provider_message: probeBody?.error?.message || `HTTP ${probe.status}`,
         });
       } catch (err: any) {
+        console.error('[AI-KEY-VALIDATION] Falha de rede ao consultar OpenAI', {
+          user_id: userId,
+          message: err?.message || String(err),
+        });
         return jsonResponse({
           success: true,
           valid: false,

@@ -105,7 +105,7 @@ echo "========================================================"
 echo " 4) ULTIMOS EVENTOS DE I.A. NO LOG DA FUNCAO (historico)"
 echo "========================================================"
 docker logs --since 30m "$CONTAINER_FN" 2>&1 \
-  | grep -aiE '\[AI-AUTO\]|\[AI-AGENT|\[WEBHOOK-AI-DEBUG\]|OpenAI' \
+  | grep -aiE '\[AI-KEY-VALIDATION\]|\[AI-AUTO\]|\[AI-AGENT|\[WEBHOOK-AI-DEBUG\]|OpenAI' \
   | tail -n 80 || echo "(sem eventos de I.A. nos ultimos 30 minutos)"
 
 echo ""
@@ -115,7 +115,7 @@ echo "    Etapas esperadas: processing_started -> credentials_resolved"
 echo "    -> model_reply_received -> reply_sent"
 echo "========================================================"
 timeout "${SEGUNDOS}" docker logs -f --since 5s "$CONTAINER_FN" 2>&1 \
-  | grep -aiE '\[AI-AUTO\]|\[AI-AGENT|\[WEBHOOK-AI-DEBUG\]|\[SEND-MESSAGE\]|OpenAI' \
+  | grep -aiE '\[AI-KEY-VALIDATION\]|\[AI-AUTO\]|\[AI-AGENT|\[WEBHOOK-AI-DEBUG\]|\[SEND-MESSAGE\]|OpenAI' \
   || true
 
 echo ""
@@ -131,6 +131,8 @@ cat <<'TXT'
  failed_model_request             -> OpenAI recusou (chave/credito/modelo)
  send_failed                      -> Meta recusou o envio (veja o erro na linha)
  reply_sent                       -> respondeu com sucesso
+ [AI-KEY-VALIDATION] Token válido -> chave salva/reenviada aceita pela OpenAI
+ [AI-KEY-VALIDATION] ... recusado -> veja status/code sem expor o token
 
  Nenhuma linha durante a escuta -> o webhook nao chegou:
    ./deploy/diagnosticar-um-numero.sh <phone_number_id>

@@ -38,6 +38,7 @@ STACK="$ROOT/deploy/postgres-stack"
 SQLDIR="$STACK/sql"
 NORMALIZER="$ROOT/deploy/normalizar-dump.py"
 SEM_BUILD="${SEM_BUILD:-0}"
+REPO_URL="https://github.com/gabrielmaisresultadosonline/whatsapp-home-launcher.git"
 
 sudo_() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo "$@"; fi; }
 
@@ -45,7 +46,23 @@ sudo_() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo "$@"; fi; }
 sec "1/9 Código"
 cd "$ROOT"
 if [ -d .git ]; then
-  git pull --ff-only origin "$(git rev-parse --abbrev-ref HEAD)" || warn "git pull não aplicado (siga com o código local)"
+  if [ -x "$ROOT/deploy/backup-antes-de-atualizar.sh" ] && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx zapmro-db; then
+    info "criando backup de segurança antes da atualização"
+    "$ROOT/deploy/backup-antes-de-atualizar.sh"
+  else
+    warn "backup automático não executado (banco ainda não está ativo ou script indisponível)"
+  fi
+  origem_atual="$(git remote get-url origin 2>/dev/null || true)"
+  if [ "$origem_atual" != "$REPO_URL" ]; then
+    info "trocando origin antigo pelo novo repositório"
+    git remote set-url origin "$REPO_URL"
+    info "baixando a branch main do novo repositório"
+    git fetch origin main
+    git reset --hard origin/main
+  else
+    git pull --ff-only origin "$(git rev-parse --abbrev-ref HEAD)" || warn "git pull não aplicado (siga com o código local)"
+  fi
+  info "origin: $(git remote get-url origin)"
 fi
 chmod +x "$ROOT/deploy/"*.sh 2>/dev/null || true
 ok "código em $(git rev-parse --short HEAD 2>/dev/null || echo 'local')"
