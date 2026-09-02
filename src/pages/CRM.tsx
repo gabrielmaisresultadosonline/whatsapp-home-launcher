@@ -2584,6 +2584,16 @@ const CRM = () => {
        
        if (error) throw error;
 
+       // Persistido com sucesso: qualquer leitura iniciada antes deste instante
+       // é obsoleta. O rascunho da chave vira o valor oficial do estado.
+       settingsSavedAtRef.current = Date.now();
+       openAiKeyDraftRef.current = null;
+       if (typeof settingsToSave.openai_api_key === 'string') {
+         const savedKey = settingsToSave.openai_api_key;
+         setMetaSettings((previous: typeof metaSettings) => ({ ...previous, openai_api_key: savedKey }));
+         console.info('[AI-KEY] Chave persistida.', { length: savedKey.length, suffix: savedKey.slice(-4) });
+       }
+
        // Sync with Admin Central if needed (mocked for now)
        console.log('Syncing settings with Admin Central for token activation...');
 
