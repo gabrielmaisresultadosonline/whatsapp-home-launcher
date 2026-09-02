@@ -7955,14 +7955,24 @@ const CRM = () => {
                                 placeholder="sk-..."
                                 value={metaSettings.openai_api_key}
                                 onChange={(e) => {
-                                  if (validatedOpenAiKeyRef.current?.key !== e.target.value.trim()) {
+                                  const typed = e.target.value;
+                                  // Rascunho em edição: nenhum recarregamento em
+                                  // segundo plano pode substituir este valor.
+                                  openAiKeyDraftRef.current = typed;
+                                  if (validatedOpenAiKeyRef.current?.key !== typed.trim()) {
                                     validatedOpenAiKeyRef.current = null;
                                   }
-                                  setMetaSettings({...metaSettings, openai_api_key: e.target.value});
+                                  setMetaSettings((previous: typeof metaSettings) => ({
+                                    ...previous,
+                                    openai_api_key: typed,
+                                  }));
                                   setOpenAiKeyCheck({ state: 'idle' });
                                 }}
                                 onBlur={(e) => {
                                   const value = e.target.value.trim();
+                                  if (openAiKeyDraftRef.current !== null) {
+                                    openAiKeyDraftRef.current = value;
+                                  }
                                   if (value !== e.target.value) {
                                     setMetaSettings((previous: typeof metaSettings) => ({
                                       ...previous,
