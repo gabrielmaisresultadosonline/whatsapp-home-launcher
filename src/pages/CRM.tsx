@@ -2540,6 +2540,11 @@ const CRM = () => {
          for (const col of ALLOWED_COLUMNS) {
            if (targetSettings[col] !== undefined) rest[col] = targetSettings[col];
          }
+         // A OpenAI rejeita espaços/quebras de linha no Bearer token. A mesma
+         // forma canônica validada deve ser a forma persistida e usada pelo agente.
+         if (typeof rest.openai_api_key === 'string') {
+           rest.openai_api_key = rest.openai_api_key.trim();
+         }
          // Normaliza FKs vazias para null (evita violar FK)
          if (rest.initial_flow_id === '') rest.initial_flow_id = null;
          if (rest.countdown_trigger_flow_id === '') rest.countdown_trigger_flow_id = null;
@@ -7927,6 +7932,12 @@ const CRM = () => {
                                 }}
                                 onBlur={(e) => {
                                   const value = e.target.value.trim();
+                                  if (value !== e.target.value) {
+                                    setMetaSettings((previous: typeof metaSettings) => ({
+                                      ...previous,
+                                      openai_api_key: value,
+                                    }));
+                                  }
                                   if (value) void validateOpenAiKey(value, { silent: true });
                                 }}
                               />
@@ -7995,7 +8006,7 @@ const CRM = () => {
                                   const key = String(metaSettings.openai_api_key || '').trim();
                                   const check = await validateOpenAiKey(key);
                                   if (!check.valid) return;
-                                  await handleSaveSettings();
+                                   await handleSaveSettings({ ...metaSettings, openai_api_key: key });
                                 }}
                                 disabled={saving || openAiKeyCheck.state === 'checking'}
                                 size="sm"
