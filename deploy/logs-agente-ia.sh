@@ -76,14 +76,13 @@ echo "========================================================"
 psqlq "
 SELECT u.email,
        n.meta_display_phone_number AS numero,
-       n.is_primary,
        n.is_active,
        (n.meta_phone_number_id IS NOT NULL) AS tem_phone_id,
        (n.meta_access_token IS NOT NULL)    AS tem_token
   FROM public.crm_whatsapp_numbers n
   LEFT JOIN auth.users u ON u.id = n.user_id
  WHERE ${WHERE}
- ORDER BY u.email, n.is_primary DESC
+ ORDER BY u.email, n.is_active DESC
  LIMIT 50;"
 
 echo ""

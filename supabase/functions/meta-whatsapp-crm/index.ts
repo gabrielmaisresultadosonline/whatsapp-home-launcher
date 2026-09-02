@@ -6756,12 +6756,17 @@ async function fetchAndStoreIncomingMedia(
       const rawKey = looksMasked && persistedKey ? persistedKey : submittedKey;
       const keySource = looksMasked && persistedKey ? 'persisted' : 'submitted';
 
-      console.log('[AI-KEY-VALIDATION] Solicitação recebida', {
-        user_id: userId,
-        source: keySource,
-        length: rawKey.length,
-        reused_persisted_key: keySource === 'persisted',
-      });
+      // Log em UMA linha (JSON) para o grep do deploy/logs-agente-ia.sh não
+      // truncar o objeto. Nunca registra a chave — apenas tamanho e sufixo.
+      const keyLog = (extra: Record<string, unknown>) =>
+        JSON.stringify({
+          user_id: userId,
+          source: keySource,
+          length: rawKey.length,
+          suffix: rawKey.slice(-4),
+          ...extra,
+        });
+      console.log('[AI-KEY-VALIDATION] Solicitação recebida', keyLog({}));
 
       if (!rawKey) {
         return jsonResponse({
@@ -6819,11 +6824,7 @@ async function fetchAndStoreIncomingMedia(
         if (!check.ok) {
           const body = await check.json().catch(() => ({} as any));
           const mapped = mapOpenAiError(check.status, body);
-          console.warn('[AI-KEY-VALIDATION] Consulta de modelo recusada', {
-            user_id: userId,
-            status: check.status,
-            code: mapped.code,
-          });
+          console.warn('[AI-KEY-VALIDATION] Consulta de modelo recusada', keyLog({ status: check.status, code: mapped.code }));
           return jsonResponse({
             success: true,
             valid: false,
@@ -6853,10 +6854,7 @@ async function fetchAndStoreIncomingMedia(
         });
 
         if (probe.ok) {
-          console.log('[AI-KEY-VALIDATION] Token válido e com saldo', {
-            user_id: userId,
-            model: 'gpt-4o-mini',
-          });
+          console.log('[AI-KEY-VALIDATION] Token válido e com saldo', keyLog({ model: 'gpt-4o-mini' }));
           return jsonResponse({
             success: true,
             valid: true,
@@ -6867,11 +6865,7 @@ async function fetchAndStoreIncomingMedia(
 
         const probeBody = await probe.json().catch(() => ({} as any));
         const mapped = mapOpenAiError(probe.status, probeBody);
-        console.warn('[AI-KEY-VALIDATION] Teste de saldo/modelo recusado', {
-          user_id: userId,
-          status: probe.status,
-          code: mapped.code,
-        });
+        console.warn('[AI-KEY-VALIDATION] Teste de saldo/modelo recusado', keyLog({ status: probe.status, code: mapped.code }));
         return jsonResponse({
           success: true,
           valid: false,
@@ -6881,10 +6875,7 @@ async function fetchAndStoreIncomingMedia(
           provider_message: probeBody?.error?.message || `HTTP ${probe.status}`,
         });
       } catch (err: any) {
-        console.error('[AI-KEY-VALIDATION] Falha de rede ao consultar OpenAI', {
-          user_id: userId,
-          message: err?.message || String(err),
-        });
+        console.error('[AI-KEY-VALIDATION] Falha de rede ao consultar OpenAI', keyLog({ message: err?.message || String(err) }));
         return jsonResponse({
           success: true,
           valid: false,

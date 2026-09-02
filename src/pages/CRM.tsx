@@ -455,6 +455,15 @@ const CRM = () => {
     key: string;
     promise: Promise<{ valid: boolean; message: string; detail?: string }>;
   } | null>(null);
+  /**
+   * Proteção contra corrida: `fetchData` é disparado por visibilitychange
+   * (ex.: voltar da aba da OpenAI) e a resposta de `getCloudSettings` pode
+   * chegar DEPOIS de um Salvar — sobrescrevendo o campo (type=password) com
+   * a chave antiga. Guardamos o instante do último salvamento e o rascunho
+   * em edição para que respostas obsoletas nunca vençam o que o usuário digitou.
+   */
+  const settingsSavedAtRef = useRef<number>(0);
+  const openAiKeyDraftRef = useRef<string | null>(null);
 
   const [bizWarnExpanded, setBizWarnExpanded] = useState(false);
   const [expiredWindowDialog, setExpiredWindowDialog] = useState(false);
@@ -2310,6 +2319,9 @@ const CRM = () => {
 
  
         let settingsData = null;
+        // Marca o início da leitura: se um Salvar acontecer enquanto esta
+        // requisição está no ar, a resposta é obsoleta e não pode ser aplicada.
+        const settingsFetchStartedAt = Date.now();
         const { data: cloudSettings, error: cloudSettingsError } = await supabase.functions.invoke('meta-whatsapp-crm', {
           body: { action: 'getCloudSettings' }
         });
@@ -2326,13 +2338,22 @@ const CRM = () => {
           settingsData = directSettings;
         }
  
-       if (settingsData) {
+       const settingsStale = settingsSavedAtRef.current > settingsFetchStartedAt;
+       if (settingsData && settingsStale) {
+         console.info('[CRM] Configurações recebidas são anteriores ao último salvamento; ignoradas para não sobrescrever o que foi salvo.');
+       }
+       if (settingsData && !settingsStale) {
          const loadedKey = String(settingsData.openai_api_key || '').trim();
-         if (validatedOpenAiKeyRef.current?.key !== loadedKey) {
+         const draftKey = openAiKeyDraftRef.current;
+         // Se o usuário está editando a chave, o rascunho vence o valor do banco.
+         const effectiveKey = draftKey !== null ? draftKey : loadedKey;
+         if (validatedOpenAiKeyRef.current?.key !== effectiveKey.trim()) {
            validatedOpenAiKeyRef.current = null;
            setOpenAiKeyCheck({ state: 'idle' });
          }
-         setMetaSettings(settingsData);
+         setMetaSettings(
+           draftKey !== null ? { ...settingsData, openai_api_key: draftKey } : settingsData
+         );
          setWhatsAppConnectionConfirmed(!!(settingsData.meta_access_token && settingsData.meta_phone_number_id && settingsData.meta_waba_id));
        }
  
@@ -2448,6 +2469,7 @@ const CRM = () => {
       try {
       console.info('[AI-KEY] Validando token sem expor seu conteúdo.', {
         length: normalizedKey.length,
+        suffix: normalizedKey.slice(-4),
       });
       const { data, error } = await supabase.functions.invoke('meta-whatsapp-crm', {
         body: { action: 'validateOpenAiKey', api_key: normalizedKey },
@@ -2562,6 +2584,16 @@ const CRM = () => {
        const { error } = await supabase.from('crm_settings').upsert(settingsToSave, { onConflict: 'user_id' });
        
        if (error) throw error;
+
+       // Persistido com sucesso: qualquer leitura iniciada antes deste instante
+       // é obsoleta. O rascunho da chave vira o valor oficial do estado.
+       settingsSavedAtRef.current = Date.now();
+       openAiKeyDraftRef.current = null;
+       if (typeof settingsToSave.openai_api_key === 'string') {
+         const savedKey = settingsToSave.openai_api_key;
+         setMetaSettings((previous: typeof metaSettings) => ({ ...previous, openai_api_key: savedKey }));
+         console.info('[AI-KEY] Chave persistida.', { length: savedKey.length, suffix: savedKey.slice(-4) });
+       }
 
        // Sync with Admin Central if needed (mocked for now)
        console.log('Syncing settings with Admin Central for token activation...');
@@ -7923,14 +7955,24 @@ const CRM = () => {
                                 placeholder="sk-..."
                                 value={metaSettings.openai_api_key}
                                 onChange={(e) => {
-                                  if (validatedOpenAiKeyRef.current?.key !== e.target.value.trim()) {
+                                  const typed = e.target.value;
+                                  // Rascunho em edição: nenhum recarregamento em
+                                  // segundo plano pode substituir este valor.
+                                  openAiKeyDraftRef.current = typed;
+                                  if (validatedOpenAiKeyRef.current?.key !== typed.trim()) {
                                     validatedOpenAiKeyRef.current = null;
                                   }
-                                  setMetaSettings({...metaSettings, openai_api_key: e.target.value});
+                                  setMetaSettings((previous: typeof metaSettings) => ({
+                                    ...previous,
+                                    openai_api_key: typed,
+                                  }));
                                   setOpenAiKeyCheck({ state: 'idle' });
                                 }}
                                 onBlur={(e) => {
                                   const value = e.target.value.trim();
+                                  if (openAiKeyDraftRef.current !== null) {
+                                    openAiKeyDraftRef.current = value;
+                                  }
                                   if (value !== e.target.value) {
                                     setMetaSettings((previous: typeof metaSettings) => ({
                                       ...previous,
