@@ -455,6 +455,15 @@ const CRM = () => {
     key: string;
     promise: Promise<{ valid: boolean; message: string; detail?: string }>;
   } | null>(null);
+  /**
+   * Proteção contra corrida: `fetchData` é disparado por visibilitychange
+   * (ex.: voltar da aba da OpenAI) e a resposta de `getCloudSettings` pode
+   * chegar DEPOIS de um Salvar — sobrescrevendo o campo (type=password) com
+   * a chave antiga. Guardamos o instante do último salvamento e o rascunho
+   * em edição para que respostas obsoletas nunca vençam o que o usuário digitou.
+   */
+  const settingsSavedAtRef = useRef<number>(0);
+  const openAiKeyDraftRef = useRef<string | null>(null);
 
   const [bizWarnExpanded, setBizWarnExpanded] = useState(false);
   const [expiredWindowDialog, setExpiredWindowDialog] = useState(false);
