@@ -38,7 +38,7 @@ sudo apt install -y nodejs
 
 ```bash
 cd /var/www
-git clone https://github.com/gabrielmaisresultadosonline/zapmro-crm-whatsapp-profissional.git ia-mro
+git clone https://github.com/gabrielmaisresultadosonline/whatsapp-home-launcher.git ia-mro
 cd ia-mro
 ```
 

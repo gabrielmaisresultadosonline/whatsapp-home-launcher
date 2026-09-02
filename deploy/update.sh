@@ -15,6 +15,7 @@ APP_DIR="/var/www/$APP_NAME"
 NGINX_SITE="/etc/nginx/sites-available/$APP_NAME"
 DOMAIN="maisresultadosonline.com.br"
 WPP_BOT_DIR="$APP_DIR/whatsapp-bot"
+REPO_URL="https://github.com/gabrielmaisresultadosonline/whatsapp-home-launcher.git"
 
 # Sudo helper (permite rodar como root ou usuário normal)
 SUDO=""
@@ -25,6 +26,12 @@ fi
 cd "$APP_DIR"
 
 echo "📥 Baixando atualizações do GitHub..."
+CURRENT_ORIGIN="$(git remote get-url origin 2>/dev/null || true)"
+if [ "$CURRENT_ORIGIN" != "$REPO_URL" ]; then
+    echo "🔁 Alterando origin para o novo repositório..."
+    git remote set-url origin "$REPO_URL"
+fi
+echo "📍 Origin atual: $(git remote get-url origin)"
 git fetch origin
 git reset --hard origin/main
 

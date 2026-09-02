@@ -38,6 +38,7 @@ STACK="$ROOT/deploy/postgres-stack"
 SQLDIR="$STACK/sql"
 NORMALIZER="$ROOT/deploy/normalizar-dump.py"
 SEM_BUILD="${SEM_BUILD:-0}"
+REPO_URL="https://github.com/gabrielmaisresultadosonline/whatsapp-home-launcher.git"
 
 sudo_() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo "$@"; fi; }
 
@@ -45,6 +46,12 @@ sudo_() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo "$@"; fi; }
 sec "1/9 Código"
 cd "$ROOT"
 if [ -d .git ]; then
+  origem_atual="$(git remote get-url origin 2>/dev/null || true)"
+  if [ "$origem_atual" != "$REPO_URL" ]; then
+    info "trocando origin antigo pelo novo repositório"
+    git remote set-url origin "$REPO_URL"
+  fi
+  info "origin: $(git remote get-url origin)"
   git pull --ff-only origin "$(git rev-parse --abbrev-ref HEAD)" || warn "git pull não aplicado (siga com o código local)"
 fi
 chmod +x "$ROOT/deploy/"*.sh 2>/dev/null || true
