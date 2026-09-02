@@ -56,9 +56,13 @@ if [ -d .git ]; then
   if [ "$origem_atual" != "$REPO_URL" ]; then
     info "trocando origin antigo pelo novo repositório"
     git remote set-url origin "$REPO_URL"
+    info "baixando a branch main do novo repositório"
+    git fetch origin main
+    git reset --hard origin/main
+  else
+    git pull --ff-only origin "$(git rev-parse --abbrev-ref HEAD)" || warn "git pull não aplicado (siga com o código local)"
   fi
   info "origin: $(git remote get-url origin)"
-  git pull --ff-only origin "$(git rev-parse --abbrev-ref HEAD)" || warn "git pull não aplicado (siga com o código local)"
 fi
 chmod +x "$ROOT/deploy/"*.sh 2>/dev/null || true
 ok "código em $(git rev-parse --short HEAD 2>/dev/null || echo 'local')"

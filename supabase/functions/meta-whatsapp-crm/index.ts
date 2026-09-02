@@ -6760,7 +6760,6 @@ async function fetchAndStoreIncomingMedia(
         user_id: userId,
         source: keySource,
         length: rawKey.length,
-        suffix: rawKey ? rawKey.slice(-4) : 'empty',
         reused_persisted_key: keySource === 'persisted',
       });
 
@@ -6824,7 +6823,6 @@ async function fetchAndStoreIncomingMedia(
             user_id: userId,
             status: check.status,
             code: mapped.code,
-            suffix: rawKey.slice(-4),
           });
           return jsonResponse({
             success: true,
@@ -6858,7 +6856,6 @@ async function fetchAndStoreIncomingMedia(
           console.log('[AI-KEY-VALIDATION] Token válido e com saldo', {
             user_id: userId,
             model: 'gpt-4o-mini',
-            suffix: rawKey.slice(-4),
           });
           return jsonResponse({
             success: true,
@@ -6874,7 +6871,6 @@ async function fetchAndStoreIncomingMedia(
           user_id: userId,
           status: probe.status,
           code: mapped.code,
-          suffix: rawKey.slice(-4),
         });
         return jsonResponse({
           success: true,
