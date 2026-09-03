@@ -7429,6 +7429,7 @@ const CRM = () => {
                                        </div>
                                       <div className="flex-1 relative flex items-center min-w-0">
                                         <Textarea 
+                                          ref={messageTextareaRef}
                                           placeholder={isRecording ? "Gravando..." : "Mensagem"}
                                           value={newMessage} 
                                           disabled={isRecording}
@@ -7443,13 +7444,24 @@ const CRM = () => {
                                            rows={1}
                                            className="bg-white dark:bg-[#2a3942] border-none min-h-10 max-h-[60vh] py-2 pr-8 sm:pr-9 rounded-xl shadow-sm text-sm focus-visible:ring-0 w-full min-w-0 resize-y"
                                         />
-                                        <Button 
-                                          size="icon" 
-                                          variant="ghost" 
-                                          className="absolute right-0.5 h-8 w-8 text-[#54656f] dark:text-[#aebac1] hover:bg-transparent"
-                                        >
-                                          <Smile className="w-5 h-5" />
-                                        </Button>
+                                        <EmojiPicker
+                                          disabled={isRecording}
+                                          className="absolute right-0.5 text-[#54656f] dark:text-[#aebac1] hover:bg-transparent"
+                                          onSelect={(emoji) => {
+                                            // Insere na posição do cursor (ou no fim) e mantém o foco no campo
+                                            const el = messageTextareaRef.current;
+                                            const start = el?.selectionStart ?? newMessage.length;
+                                            const end = el?.selectionEnd ?? newMessage.length;
+                                            const next = newMessage.slice(0, start) + emoji + newMessage.slice(end);
+                                            setNewMessage(next);
+                                            requestAnimationFrame(() => {
+                                              if (!el) return;
+                                              el.focus();
+                                              const pos = start + emoji.length;
+                                              try { el.setSelectionRange(pos, pos); } catch {}
+                                            });
+                                          }}
+                                        />
                                       </div>
                                       {!isRecording ? (
                                         <div className="flex items-center gap-0.5 sm:gap-1 shrink-0">
