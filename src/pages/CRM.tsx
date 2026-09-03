@@ -113,6 +113,8 @@ import { ImageEditor } from "@/components/crm/ImageEditor";
 import ModuleManager from "@/components/admin/ModuleManager";
 import SalesTutorials from "@/components/sales/SalesTutorials";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { EmojiPicker } from "@/components/crm/EmojiPicker";
+import { getFileExtension, resolveMimeType } from "@/lib/mime";
 import { Calendar as CalendarComponent } from "@/components/ui/calendar";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
