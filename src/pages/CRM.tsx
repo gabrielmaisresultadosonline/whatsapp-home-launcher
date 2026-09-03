@@ -113,6 +113,8 @@ import { ImageEditor } from "@/components/crm/ImageEditor";
 import ModuleManager from "@/components/admin/ModuleManager";
 import SalesTutorials from "@/components/sales/SalesTutorials";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { EmojiPicker } from "@/components/crm/EmojiPicker";
+import { getFileExtension, resolveMimeType } from "@/lib/mime";
 import { Calendar as CalendarComponent } from "@/components/ui/calendar";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
@@ -724,7 +726,13 @@ const CRM = () => {
   const [recordedAudioUrl, setRecordedAudioUrl] = useState<string | null>(null);
   const [recordedAudioBlob, setRecordedAudioBlob] = useState<Blob | null>(null);
   const recordingTimerRef = useRef<any>(null);
+  // Recursos de gravação mantidos em refs (não em state) para permitir cleanup síncrono e confiável
+  const recorderRef = useRef<any>(null);
+  const micStreamRef = useRef<MediaStream | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const isStartingRecordingRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const messageTextareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [isFlowEditorOpen, setIsFlowEditorOpen] = useState(false);
   const [flowSaveOverlay, setFlowSaveOverlay] = useState<{ open: boolean; done: boolean }>({ open: false, done: false });
@@ -3648,81 +3656,171 @@ const CRM = () => {
     }
   };
 
+  /**
+   * Libera TODOS os recursos de áudio (recorder, stream do microfone e
+   * AudioContext). Browsers travam o microfone se um stream anterior não for
+   * fechado — motivo pelo qual "recarregar a página" resolvia o problema.
+   */
+  const releaseRecordingResources = () => {
+    const rec = recorderRef.current;
+    if (rec) {
+      try { rec.ondataavailable = null; } catch {}
+      try { if (rec.state && rec.state !== 'inactive') rec.stop?.(); } catch {}
+      try { rec.close?.(); } catch {}
+      recorderRef.current = null;
+    }
+    if (micStreamRef.current) {
+      try { micStreamRef.current.getTracks().forEach(t => t.stop()); } catch {}
+      micStreamRef.current = null;
+    }
+    if (audioCtxRef.current) {
+      try { void audioCtxRef.current.close(); } catch {}
+      audioCtxRef.current = null;
+    }
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+    setMediaRecorder(null);
+  };
+
+  const finishRecordingWithBlob = (audioBlob: Blob) => {
+    console.log(`[RECORDER] Gravação finalizada. Tamanho: ${audioBlob.size} bytes, Tipo: ${audioBlob.type}`);
+    if (!audioBlob.size) {
+      toast({ title: "Gravação vazia", description: "Nenhum áudio foi capturado. Tente novamente.", variant: "destructive" });
+      return;
+    }
+    const audioUrl = URL.createObjectURL(audioBlob);
+    setRecordedAudioBlob(audioBlob);
+    setRecordedAudioUrl(audioUrl);
+    setIsPreviewingAudio(true);
+  };
+
   const startRecording = async () => {
-    // Cleanup: garante que qualquer gravação/stream anterior seja liberado
-    // antes de pedir microfone novamente (browsers travam o mic se um stream
-    // anterior nao foi fechado — motivo pelo qual "recarregar a página" resolve).
-    try {
-      if (mediaRecorder) {
-        try { (mediaRecorder as any).stop?.(); } catch {}
-        try { (mediaRecorder as any).close?.(); } catch {}
-        setMediaRecorder(null);
-      }
-      if (recordingTimerRef.current) {
-        clearInterval(recordingTimerRef.current);
-        recordingTimerRef.current = null;
-      }
-      setIsRecording(false);
-    } catch {}
+    // Evita duplo clique / duas gravações simultâneas
+    if (isStartingRecordingRef.current || isRecording) return;
+    isStartingRecordingRef.current = true;
+
+    // Cleanup de qualquer gravação anterior antes de pedir o microfone de novo
+    releaseRecordingResources();
+    setIsRecording(false);
 
     let stream: MediaStream | null = null;
     try {
       if (!navigator.mediaDevices?.getUserMedia) {
-        throw new Error('Navegador nao suporta captura de microfone');
+        throw new Error('Este navegador não suporta captura de microfone. Use HTTPS e um navegador atualizado.');
       }
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      
-      const { default: Recorder } = await import('opus-recorder');
-      const recorder: any = new Recorder({
-        encoderPath: '/opus/encoderWorker.min.js',
-        encoderApplication: 2048,
-        encoderSampleRate: 16000,
-        numberOfChannels: 1,
-        streamPages: false,
-        encoderBitRate: 24000,
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
       });
+      micStreamRef.current = stream;
 
-      console.log(`[RECORDER] Iniciando gravação PTT com Opus-Recorder.`);
-      
-      const activeStream = stream;
-      recorder.ondataavailable = (typedArray: Uint8Array) => {
-        const buf = typedArray.buffer.slice(typedArray.byteOffset, typedArray.byteOffset + typedArray.byteLength) as ArrayBuffer;
-        const audioBlob = new Blob([buf], { type: 'audio/ogg; codecs=opus' });
-        console.log(`[RECORDER] Gravação finalizada. Tamanho: ${audioBlob.size} bytes, Tipo: audio/ogg; codecs=opus`);
-        
-        const audioUrl = URL.createObjectURL(audioBlob);
-        setRecordedAudioBlob(audioBlob);
-        setRecordedAudioUrl(audioUrl);
-        setIsPreviewingAudio(true);
-        
-        activeStream.getTracks().forEach(track => track.stop());
-        try { (recorder as any).close?.(); } catch {}
-      };
+      // 1) Caminho preferencial: Opus-Recorder gerando OGG/Opus (PTT na Meta).
+      //    IMPORTANTE: passamos um sourceNode do NOSSO stream — sem isso a lib
+      //    chama getUserMedia de novo internamente, e em vários dispositivos a
+      //    segunda solicitação falha (NotReadableError) enquanto a primeira está ativa.
+      let started = false;
+      try {
+        const { default: Recorder } = await import('opus-recorder');
+        const AudioCtx = (window.AudioContext || (window as any).webkitAudioContext) as typeof AudioContext;
+        const audioCtx = new AudioCtx();
+        audioCtxRef.current = audioCtx;
+        try { await audioCtx.resume(); } catch {}
+        const sourceNode = audioCtx.createMediaStreamSource(stream);
 
-      // Alguns browsers suspendem o AudioContext interno — garante retomada
-      try { await (recorder as any).audioContext?.resume?.(); } catch {}
-      await recorder.start();
-      setMediaRecorder(recorder);
+        const recorder: any = new Recorder({
+          encoderPath: '/opus/encoderWorker.min.js',
+          encoderApplication: 2048,
+          encoderSampleRate: 16000,
+          numberOfChannels: 1,
+          streamPages: false,
+          encoderBitRate: 24000,
+          sourceNode,
+        });
+
+        recorder.ondataavailable = (typedArray: Uint8Array) => {
+          const buf = typedArray.buffer.slice(typedArray.byteOffset, typedArray.byteOffset + typedArray.byteLength) as ArrayBuffer;
+          finishRecordingWithBlob(new Blob([buf], { type: 'audio/ogg; codecs=opus' }));
+          releaseRecordingResources();
+        };
+
+        console.log('[RECORDER] Iniciando gravação PTT com Opus-Recorder.');
+        // Timeout defensivo: se o worker do encoder não carregar (404/CSP), cai no fallback
+        await Promise.race([
+          recorder.start(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout ao iniciar encoder Opus')), 8000)),
+        ]);
+        recorderRef.current = recorder;
+        setMediaRecorder(recorder);
+        started = true;
+      } catch (opusErr) {
+        console.warn('[RECORDER] Opus-Recorder indisponível, usando MediaRecorder nativo.', opusErr);
+        if (audioCtxRef.current) { try { void audioCtxRef.current.close(); } catch {} audioCtxRef.current = null; }
+      }
+
+      // 2) Fallback: MediaRecorder nativo (webm/opus no Chrome, mp4 no Safari).
+      //    O backend/VPS transcoder normaliza para OGG antes de enviar à Meta.
+      if (!started) {
+        if (typeof MediaRecorder === 'undefined') {
+          throw new Error('Gravação de áudio não suportada neste navegador.');
+        }
+        const candidates = ['audio/ogg;codecs=opus', 'audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', ''];
+        const mimeType = candidates.find(c => !c || MediaRecorder.isTypeSupported(c)) ?? '';
+        const native = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+        const chunks: BlobPart[] = [];
+        native.ondataavailable = (ev: BlobEvent) => { if (ev.data && ev.data.size) chunks.push(ev.data); };
+        native.onstop = () => {
+          finishRecordingWithBlob(new Blob(chunks, { type: native.mimeType || mimeType || 'audio/webm' }));
+          releaseRecordingResources();
+        };
+        native.onerror = (ev: Event) => {
+          console.error('[RECORDER] Erro no MediaRecorder nativo', ev);
+          toast({ title: "Erro na gravação", description: "O navegador interrompeu a captura de áudio.", variant: "destructive" });
+          releaseRecordingResources();
+          setIsRecording(false);
+        };
+        native.start(250);
+        recorderRef.current = native;
+        setMediaRecorder(native as any);
+      }
+
       setIsRecording(true);
       setRecordingDuration(0);
       recordingTimerRef.current = setInterval(() => {
         setRecordingDuration(prev => prev + 1);
       }, 1000);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error starting recording:', err);
-      // Libera o stream caso getUserMedia tenha sucedido mas o recorder falhou
-      if (stream) {
-        try { stream.getTracks().forEach(t => t.stop()); } catch {}
+      releaseRecordingResources();
+      const name = err?.name || '';
+      let description = err?.message || 'Não foi possível acessar o microfone.';
+      if (name === 'NotAllowedError' || name === 'SecurityError') {
+        description = 'Permissão negada. Clique no cadeado ao lado do endereço do site e permita o microfone.';
+      } else if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+        description = 'Nenhum microfone encontrado neste dispositivo.';
+      } else if (name === 'NotReadableError' || name === 'TrackStartError') {
+        description = 'O microfone está em uso por outro aplicativo ou aba. Feche-o e tente novamente.';
       }
-      toast({ title: "Erro ao acessar microfone", variant: "destructive" });
+      toast({ title: "Erro ao acessar microfone", description, variant: "destructive" });
+    } finally {
+      isStartingRecordingRef.current = false;
     }
   };
 
   const stopRecording = () => {
-    if (mediaRecorder && isRecording) {
-      mediaRecorder.stop();
-      setIsRecording(false);
-      if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+    const rec = recorderRef.current || (mediaRecorder as any);
+    if (!rec || !isRecording) return;
+    setIsRecording(false);
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+    try {
+      rec.stop();
+    } catch (err) {
+      console.error('[RECORDER] Falha ao parar gravação', err);
+      releaseRecordingResources();
+      toast({ title: "Erro ao finalizar gravação", variant: "destructive" });
     }
   };
 
@@ -3895,12 +3993,23 @@ const CRM = () => {
         fileExt = 'ogg';
         contentType = 'audio/ogg; codecs=opus';
       } else if (file instanceof File) {
-        fileExt = file.name.split('.').pop() || 'bin';
-        contentType = file.type;
+        // Extensão saneada (minúscula, só [a-z0-9]) — evita path inválido no Storage
+        fileExt = (getFileExtension(file.name) || 'bin').replace(/[^a-z0-9]/g, '') || 'bin';
+        // File.type costuma vir vazio p/ .rar, .csv, .doc no Windows → infere pela extensão
+        contentType = resolveMimeType(file);
+      } else {
+        contentType = resolveMimeType({ type: (file as Blob).type });
+      }
+
+      // Documentos: valida limites da Meta antes de subir (100MB doc, 5MB img, 16MB vídeo)
+      const metaLimits: Record<typeof type, number> = { document: 100 * 1024 * 1024, image: 5 * 1024 * 1024, video: 16 * 1024 * 1024, audio: 16 * 1024 * 1024 };
+      if ((file as Blob).size > metaLimits[type]) {
+        throw new Error(`Arquivo muito grande. O WhatsApp aceita no máximo ${Math.round(metaLimits[type] / 1024 / 1024)}MB para ${type === 'document' ? 'documentos' : type}.`);
       }
 
       const fileName = `${Math.random().toString(36).substring(2)}_${Date.now()}.${fileExt}`;
       const filePath = `chat-media/${fileName}`;
+      const originalFileName = file instanceof File && file.name ? file.name : `document.${fileExt}`;
 
       setMediaUploadProgress(prev => ({ ...prev, [targetContactId]: 30 }));
 
@@ -3998,7 +4107,8 @@ const CRM = () => {
           imageUrl: type === 'image' ? publicUrl : undefined,
           videoUrl: type === 'video' ? publicUrl : undefined,
           documentUrl: type === 'document' ? publicUrl : undefined,
-          fileName: type === 'document' ? (file instanceof File ? file.name : 'document') : undefined,
+          fileName: type === 'document' ? originalFileName : undefined,
+          mimeType: contentType,
           isVoice: type === 'audio',
           skipLocalSave: type === 'audio' ? true : undefined,
           meta_phone_number_id: metaSettings.meta_phone_number_id,
@@ -7319,6 +7429,7 @@ const CRM = () => {
                                        </div>
                                       <div className="flex-1 relative flex items-center min-w-0">
                                         <Textarea 
+                                          ref={messageTextareaRef}
                                           placeholder={isRecording ? "Gravando..." : "Mensagem"}
                                           value={newMessage} 
                                           disabled={isRecording}
@@ -7333,13 +7444,24 @@ const CRM = () => {
                                            rows={1}
                                            className="bg-white dark:bg-[#2a3942] border-none min-h-10 max-h-[60vh] py-2 pr-8 sm:pr-9 rounded-xl shadow-sm text-sm focus-visible:ring-0 w-full min-w-0 resize-y"
                                         />
-                                        <Button 
-                                          size="icon" 
-                                          variant="ghost" 
-                                          className="absolute right-0.5 h-8 w-8 text-[#54656f] dark:text-[#aebac1] hover:bg-transparent"
-                                        >
-                                          <Smile className="w-5 h-5" />
-                                        </Button>
+                                        <EmojiPicker
+                                          disabled={isRecording}
+                                          className="absolute right-0.5 text-[#54656f] dark:text-[#aebac1] hover:bg-transparent"
+                                          onSelect={(emoji) => {
+                                            // Insere na posição do cursor (ou no fim) e mantém o foco no campo
+                                            const el = messageTextareaRef.current;
+                                            const start = el?.selectionStart ?? newMessage.length;
+                                            const end = el?.selectionEnd ?? newMessage.length;
+                                            const next = newMessage.slice(0, start) + emoji + newMessage.slice(end);
+                                            setNewMessage(next);
+                                            requestAnimationFrame(() => {
+                                              if (!el) return;
+                                              el.focus();
+                                              const pos = start + emoji.length;
+                                              try { el.setSelectionRange(pos, pos); } catch {}
+                                            });
+                                          }}
+                                        />
                                       </div>
                                       {!isRecording ? (
                                         <div className="flex items-center gap-0.5 sm:gap-1 shrink-0">
