@@ -427,6 +427,76 @@ function isPlaceholderContent(content: unknown) {
   ].includes(normalized);
 }
 
+type AiKanbanCategory = 'frio' | 'quente' | 'cliente' | 'humano';
+
+const AI_KANBAN_DEFINITIONS: Record<AiKanbanCategory, { label: string; value: string; color: string; sortOrder: number }> = {
+  frio: { label: 'Frio', value: 'ai_frio', color: 'blue', sortOrder: 40 },
+  quente: { label: 'Quente', value: 'ai_quente', color: 'red', sortOrder: 41 },
+  cliente: { label: 'Cliente', value: 'ai_cliente', color: 'green', sortOrder: 42 },
+  humano: { label: 'Quer falar com humano', value: 'ai_humano', color: 'amber', sortOrder: 43 },
+};
+
+function extractAiKanbanCategory(reply: string): AiKanbanCategory | null {
+  const match = reply.match(/\[\[KANBAN:(frio|quente|cliente|humano)\]\]/i);
+  return match ? match[1].toLowerCase() as AiKanbanCategory : null;
+}
+
+function cleanAiControlTags(reply: string): string {
+  return reply
+    .replace(/\[\[KANBAN:(?:frio|quente|cliente|humano)\]\]/gi, '')
+    .replace(/\[\[TRANSFER_TO_HUMAN\]\]/gi, '')
+    .trim();
+}
+
+function buildAiMessageParts(reply: string, sendBundled: boolean, maximumParts: number): string[] {
+  const cleanReply = reply.trim();
+  if (!cleanReply) return [];
+  if (!sendBundled) return cleanReply.split(/\n\n+/).map((part) => part.trim()).filter(Boolean).slice(0, maximumParts);
+
+  // A API do WhatsApp aceita texto limitado. Agrupa por padrão, mas mantém um
+  // fallback seguro para não perder respostas excepcionalmente longas.
+  const parts: string[] = [];
+  let remaining = cleanReply;
+  while (remaining.length > 4000 && parts.length < maximumParts - 1) {
+    let splitAt = remaining.lastIndexOf('\n', 4000);
+    if (splitAt < 2000) splitAt = remaining.lastIndexOf(' ', 4000);
+    if (splitAt < 2000) splitAt = 4000;
+    parts.push(remaining.slice(0, splitAt).trim());
+    remaining = remaining.slice(splitAt).trim();
+  }
+  if (remaining) parts.push(remaining);
+  return parts;
+}
+
+async function organizeContactInAiKanban(supabase: any, contact: any, userId: string, category: AiKanbanCategory) {
+  const definition = AI_KANBAN_DEFINITIONS[category];
+  const { data: existingStatus, error: statusError } = await supabase
+    .from('crm_statuses')
+    .select('value')
+    .eq('user_id', userId)
+    .eq('value', definition.value)
+    .maybeSingle();
+  if (statusError) throw new Error(`Não foi possível consultar o Kanban: ${statusError.message}`);
+
+  if (!existingStatus) {
+    const { error: insertStatusError } = await supabase.from('crm_statuses').insert({
+      user_id: userId,
+      label: definition.label,
+      value: definition.value,
+      color: definition.color,
+      sort_order: definition.sortOrder,
+    });
+    if (insertStatusError) throw new Error(`Não foi possível preparar o Kanban: ${insertStatusError.message}`);
+  }
+
+  const { error: contactError } = await supabase
+    .from('crm_contacts')
+    .update({ status: definition.value })
+    .eq('id', contact.id)
+    .eq('user_id', userId);
+  if (contactError) throw new Error(`Não foi possível organizar o contato no Kanban: ${contactError.message}`);
+}
+
 /**
  * Resolve o texto real de uma mensagem recebida. Se for áudio, transcreve
  * internamente (Whisper) e persiste, para a I.A responder direto ao conteúdo
@@ -529,7 +599,7 @@ async function _transcribeAudioForAi(apiKey: string, audioUrl: string) {
    });
    let messageText = text;
 
-    const { data: baseSettings, error: settingsError } = await supabase.from('crm_settings').select('openai_api_key, meta_phone_number_id, meta_access_token, vps_transcoder_url, ai_agent_enabled, business_description, ai_system_prompt').eq('user_id', userId).maybeSingle();
+    const { data: baseSettings, error: settingsError } = await supabase.from('crm_settings').select('openai_api_key, meta_phone_number_id, meta_access_token, vps_transcoder_url, ai_agent_enabled, ai_kanban_auto_organizer, ai_send_bundled, business_description, ai_system_prompt').eq('user_id', userId).maybeSingle();
   
   if (settingsError) {
     console.error(`[AI-AGENT] Error fetching settings for user ${userId}:`, settingsError);
@@ -736,6 +806,13 @@ async function _transcribeAudioForAi(apiKey: string, audioUrl: string) {
 
   if (!aiPrompt) aiPrompt = "Você é um assistente prestativo.";
   
+  const kanbanInstruction = aiSettings?.ai_kanban_auto_organizer
+    ? `\n14. ORGANIZADOR KANBAN: ao final de TODA resposta, inclua exatamente uma etiqueta interna: [[KANBAN:frio]], [[KANBAN:quente]], [[KANBAN:cliente]] ou [[KANBAN:humano]]. Use frio para baixo interesse, quente para intenção de compra clara, cliente para compra/contratação confirmada e humano quando pedir atendimento humano. A etiqueta não será mostrada ao cliente.`
+    : '';
+  const sendingInstruction = aiSettings?.ai_send_bundled
+    ? '\n15. FORMATO DE ENVIO: responda em um único bloco coeso sempre que possível.'
+    : '';
+
   const systemPrompt = `${aiPrompt}
   
   REGRAS INTERNAS E OBRIGATÓRIAS:
@@ -753,7 +830,7 @@ async function _transcribeAudioForAi(apiKey: string, audioUrl: string) {
     10. LINKS: Ao enviar um link, envie apenas a URL pura (ex: https://site.com). Nunca use markdown para links como [texto](url) e nunca repita o link. Digite o link uma única vez.
     11. SAUDAÇÕES: Não envie saudações (como "Oi!", "Olá!", "Bom dia") se você já estiver conversando com o cliente no histórico recente. Se o histórico já contém interações, pule a saudação inicial e vá direto para a resposta ou pergunta.
     12. Nunca saia do personagem.
-    13. MEMÓRIA DA CONVERSA: Sempre retome TODO o contexto já conversado no histórico (dados, nomes, valores, combinados, dúvidas pendentes). Nunca repita perguntas cujas respostas já estão no histórico e nunca recomece o atendimento do zero.`;
+    13. MEMÓRIA DA CONVERSA: Sempre retome TODO o contexto já conversado no histórico (dados, nomes, valores, combinados, dúvidas pendentes). Nunca repita perguntas cujas respostas já estão no histórico e nunca recomece o atendimento do zero.${kanbanInstruction}${sendingInstruction}`;
   
   try {
     const visualAttachments = (recentMessages || [])
@@ -811,21 +888,36 @@ ${aiPrompt}
       return { success: false, error: "OpenAI API returned error" };
     }
     
-    const reply = aiData.choices?.[0]?.message?.content || "";
+    const rawReply = aiData.choices?.[0]?.message?.content || "";
+    const kanbanCategory = aiSettings?.ai_kanban_auto_organizer
+      ? extractAiKanbanCategory(rawReply)
+      : null;
+    const wantsHumanTransfer = rawReply.includes('[[TRANSFER_TO_HUMAN]]');
+    const reply = cleanAiControlTags(rawReply);
     aiLog('model_reply_received', { reply_length: reply.length });
     console.log(`[AI-AGENT] OpenAI reply for ${waId}: ${reply.slice(0, 100)}...`);
+
+    if (kanbanCategory && contact?.id && (userId || contact?.user_id)) {
+      try {
+        await organizeContactInAiKanban(supabase, contact, userId || contact.user_id, kanbanCategory);
+        aiLog('kanban_organized', { category: kanbanCategory });
+      } catch (kanbanError: any) {
+        // Organização é auxiliar: uma falha nela nunca deve impedir a resposta.
+        aiLog('kanban_organization_failed', { error: kanbanError?.message || String(kanbanError) });
+      }
+    }
     
-    if (reply.includes('[[TRANSFER_TO_HUMAN]]')) {
+    if (wantsHumanTransfer) {
       console.log(`[AI-AGENT] AI decided to transfer contact ${waId} to human.`);
       
       // Extract the message text before the transfer tag if it exists
-      const cleanReply = reply.replace('[[TRANSFER_TO_HUMAN]]', '').trim();
+      const cleanReply = reply;
       
       // If there's a message to send before transferring, send it
       if (cleanReply) {
         const settings = aiSettings;
         if (settings) {
-          const messageParts = cleanReply.split(/\n\n+/).filter(p => p.trim()).slice(0, 3);
+          const messageParts = buildAiMessageParts(cleanReply, aiSettings?.ai_send_bundled === true, 3);
           for (const part of messageParts) {
             try {
               await handleInternalSendMessage(
@@ -907,7 +999,7 @@ ${aiPrompt}
 
         // Split reply into multiple messages if it contains double newlines or is too long,
         // to simulate human typing multiple messages. Limit to max 10 messages.
-        const messageParts = reply.split(/\n\n+/).filter(p => p.trim()).slice(0, 10);
+        const messageParts = buildAiMessageParts(reply, aiSettings?.ai_send_bundled === true, 10);
 
         let sentParts = 0;
         for (const part of messageParts) {
@@ -2863,6 +2955,9 @@ function getGoogleOAuthCredentials(settings?: any) {
 }
 
 async function pushPendingContactsToGoogle(supabase: any, userId: string, settings: any, accounts: any[], limit = 500) {
+  if (!userId || userId === 'null') {
+    throw new Error('Exportação Google recusada: usuário não identificado.');
+  }
   // Claim pending rows atomically before calling Google. processScheduled can
   // overlap with a manual sync or a previous slow cron invocation; a plain
   // SELECT allowed both executions to create the same Google contact.
@@ -3299,10 +3394,18 @@ async function autoPushGoogleContactsForAllUsers(supabase: any) {
     if (!accounts || accounts.length === 0) return;
 
     const byUser = new Map<string, any[]>();
+    let orphanAccounts = 0;
     for (const account of accounts) {
+      if (!account.user_id) {
+        orphanAccounts++;
+        continue;
+      }
       const userAccounts = byUser.get(account.user_id) || [];
       userAccounts.push(account);
       byUser.set(account.user_id, userAccounts);
+    }
+    if (orphanAccounts > 0) {
+      console.warn(`[GOOGLE-SYNC] ${orphanAccounts} conta(s) Google órfã(s) ignorada(s): user_id ausente.`);
     }
 
     for (const [userId, userAccounts] of byUser.entries()) {
@@ -6740,6 +6843,9 @@ async function fetchAndStoreIncomingMedia(
     }
 
     if (action === 'syncPendingToGoogle') {
+      if (!userId) {
+        return jsonResponse({ success: false, error: 'Usuário não identificado para exportar contatos ao Google.' }, 401);
+      }
       const targetAccountId: string | undefined = params?.targetAccountId;
       console.log(`[GOOGLE-SYNC] Solicitação de exportação recebida. targetAccountId: ${targetAccountId || 'automático'}`);
       // Push contacts that are NOT yet on Google up to active Google accounts.
