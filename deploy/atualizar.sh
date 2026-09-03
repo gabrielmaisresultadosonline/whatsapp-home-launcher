@@ -439,6 +439,17 @@ echo "  usuários auth    : $(q "select count(*) from auth.users")"
 echo "  contatos CRM     : $(q "select count(*) from public.crm_contacts")"
 echo "  mensagens CRM    : $(q "select count(*) from public.crm_messages")"
 echo "  jobs cron        : $(q "select count(*) from cron.job")"
+google_unique="$(q "select count(*) from pg_constraint where conrelid='public.crm_google_accounts'::regclass and contype in ('u','p') and conkey=ARRAY[(select attnum from pg_attribute where attrelid='public.crm_google_accounts'::regclass and attname='user_id'),(select attnum from pg_attribute where attrelid='public.crm_google_accounts'::regclass and attname='email')]::smallint[]")"
+if [ "$google_unique" = "1" ]; then
+  echo -e "  Google OAuth UNIQUE   : ${C_G}OK${N} (user_id, email)"
+else
+  die "Migration 094 não criou UNIQUE(user_id, email). Veja /tmp/zapmro-sql-094-google-accounts-unique.sql.log"
+fi
+if grep -q "Sem depender da UNIQUE(user_id,email)" "$ROOT/supabase/functions/meta-whatsapp-crm/index.ts"; then
+  echo -e "  Google OAuth function : ${C_G}OK${N} (update/insert sem ON CONFLICT)"
+else
+  die "Código antigo do OAuth Google ainda está no servidor; confirme o origin e a branch main"
+fi
 echo "  frontend aponta  : ${API}"
 
 echo
