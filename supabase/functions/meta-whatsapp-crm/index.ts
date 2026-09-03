@@ -2881,7 +2881,31 @@ async function pushPendingContactsToGoogle(supabase: any, userId: string, settin
   }
 
   if (!claimedContacts || claimedContacts.length === 0) {
-    console.log(`[GOOGLE-SYNC] Nenhum contato CRM pendente para exportação. userId: ${userId}`);
+    const { data: exportRows, error: exportRowsError } = await supabase
+      .from('crm_contacts')
+      .select('name, wa_id, google_sync_account_id, google_sync_claimed_at, metadata')
+      .eq('user_id', userId)
+      .or('google_sync_account_id.is.null,metadata->>google_dirty.eq.true')
+      .limit(1000);
+    const now = Date.now();
+    const tenMinutesMs = 10 * 60 * 1000;
+    const pendingRows = exportRows || [];
+    const namedRows = pendingRows.filter((contact: any) => {
+      const name = String(contact.name || '').trim();
+      return name.length > 0 && name !== String(contact.wa_id || '').trim();
+    });
+    const recentlyClaimed = pendingRows.filter((contact: any) => {
+      const claimedAt = Date.parse(String(contact.google_sync_claimed_at || ''));
+      return Number.isFinite(claimedAt) && now - claimedAt < tenMinutesMs;
+    });
+    if (exportRowsError) {
+      console.warn(`[GOOGLE-SYNC] Falha ao diagnosticar fila vazia do usuário ${userId}: ${exportRowsError.message}`);
+    }
+    console.log(
+      `[GOOGLE-SYNC] Nenhum contato CRM elegível para exportação. userId: ${userId}; `
+      + `pendentesDoUsuario: ${pendingRows.length}; comNomeValido: ${namedRows.length}; `
+      + `reservadosUltimos10min: ${recentlyClaimed.length}. Para trazer contatos do Google ao CRM use syncGoogleContacts.`,
+    );
     return {
       success: true,
       pushed: 0,

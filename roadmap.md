@@ -12,3 +12,4 @@
 - [x] Chat: microfone confiável (stream único + AudioContext próprio, fallback MediaRecorder, cleanup total).
 - [x] Chat: seletor de emojis funcional (Popover com categorias/recentes, insere no cursor).
 - [x] Google Contatos: ligar a importação ao botão da conta, não mascarar erros como 0/0 e registrar exportações no diagnóstico.
+- [x] Google Contatos: corrigir o botão genérico para importar e separar pendentes globais/por cadastro no diagnóstico.

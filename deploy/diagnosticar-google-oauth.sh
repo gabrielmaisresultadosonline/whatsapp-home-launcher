@@ -48,7 +48,9 @@ fi
 
 echo "contas cadastradas: $(q "select count(*) from public.crm_google_accounts" || echo '?')"
 echo "contatos vinculados ao Google: $(q "select count(*) from public.crm_contacts where google_sync_account_id is not null" || echo '?')"
-echo "contatos CRM pendentes para exportação: $(q "select count(*) from public.crm_contacts where google_sync_account_id is null or metadata->>'google_dirty' = 'true'" || echo '?')"
+echo "contatos CRM pendentes para exportação (todos os cadastros): $(q "select count(*) from public.crm_contacts where google_sync_account_id is null or metadata->>'google_dirty' = 'true'" || echo '?')"
+echo "pendentes por cadastro (sufixo do user_id | total | com nome válido | reservados <10min | contas Google):"
+q "select right(c.user_id::text, 8) || ' | ' || count(*) || ' | ' || count(*) filter (where nullif(btrim(c.name), '') is not null and btrim(c.name) <> btrim(c.wa_id)) || ' | ' || count(*) filter (where c.google_sync_claimed_at >= now() - interval '10 minutes') || ' | ' || (select count(*) from public.crm_google_accounts ga where ga.user_id = c.user_id) from public.crm_contacts c where c.google_sync_account_id is null or c.metadata->>'google_dirty' = 'true' group by c.user_id order by count(*) desc" || echo "?"
 echo
 echo "Últimos eventos OAuth/Sync (30 min):"
 docker logs --since 30m "$FN_CONTAINER" 2>&1 \
@@ -56,7 +58,7 @@ docker logs --since 30m "$FN_CONTAINER" 2>&1 \
   | tail -n 100 || true
 
 echo
-echo "Escuta OAuth/Sync por ${SEGUNDOS}s — conecte ou sincronize a conta Google agora:"
+echo "Escuta OAuth/Sync por ${SEGUNDOS}s — use IMPORTAR para Google → CRM ou EXPORTAR para CRM → Google:"
 timeout "$SEGUNDOS" docker logs -f --since 2s "$FN_CONTAINER" 2>&1 \
   | grep -aiE '\[OAUTH|\[SYNC|\[GOOGLE-SYNC|exchangeGoogleCode|syncGoogleContacts|syncPendingToGoogle|unique or exclusion constraint|crm_google_accounts|People API' \
   || true
