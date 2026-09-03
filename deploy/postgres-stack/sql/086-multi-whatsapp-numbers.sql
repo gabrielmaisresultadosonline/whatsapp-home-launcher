@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS public.crm_whatsapp_numbers (
   meta_verified_name text,
   access_pin text,
   is_active boolean NOT NULL DEFAULT false,
+  is_primary boolean NOT NULL DEFAULT false,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now()
 );

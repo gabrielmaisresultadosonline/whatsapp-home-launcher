@@ -511,6 +511,8 @@ const CRM = () => {
     google_client_secret: '',
     openai_api_key: '',
     ai_agent_enabled: false,
+     ai_kanban_auto_organizer: false,
+     ai_send_bundled: false,
     ai_operation_mode: 'chat',
     ai_recovery_enabled: false,
     ai_recovery_delay_minutes: 60,
@@ -2553,7 +2555,7 @@ const CRM = () => {
            'meta_access_token','meta_phone_number_id','meta_waba_id','meta_app_id',
            'meta_app_secret','meta_display_phone_number','meta_verified_name','meta_business_id',
            'google_client_id','google_client_secret','google_auto_sync',
-           'openai_api_key','ai_agent_enabled','ai_operation_mode','ai_system_prompt',
+            'openai_api_key','ai_agent_enabled','ai_kanban_auto_organizer','ai_send_bundled','ai_operation_mode','ai_system_prompt',
             'ai_recovery_enabled','ai_recovery_delay_minutes','ai_recovery_max_attempts','ai_recovery_finalized_status','ai_recovery_scope',
            'ai_agent_trigger','ai_agent_trigger_keyword','ai_agent_prompt','ai_agent_label_on_transfer',
            'auto_generate_strategy','strategy_generation_prompt',
@@ -7942,6 +7944,52 @@ const CRM = () => {
                         }}
                       />
                     </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <Card className="rounded-lg shadow-sm border">
+                      <CardContent className="p-4 flex items-center justify-between gap-4">
+                        <div className="min-w-0 space-y-1">
+                          <Label htmlFor="ai-kanban-auto-organizer" className="text-sm font-bold">
+                            Organizador Kanban CRM automático
+                          </Label>
+                          <p className="text-xs text-muted-foreground">
+                            A IA organiza a conversa como frio, quente, cliente ou quer falar com humano.
+                          </p>
+                        </div>
+                        <Switch
+                          id="ai-kanban-auto-organizer"
+                          checked={!!metaSettings.ai_kanban_auto_organizer}
+                          onCheckedChange={async (val) => {
+                            setMetaSettings((previous: typeof metaSettings) => ({ ...previous, ai_kanban_auto_organizer: val }));
+                            await handleSaveSettings({ ...metaSettings, ai_kanban_auto_organizer: val });
+                          }}
+                          aria-label="Ativar organizador Kanban CRM automático"
+                        />
+                      </CardContent>
+                    </Card>
+
+                    <Card className="rounded-lg shadow-sm border">
+                      <CardContent className="p-4 flex items-center justify-between gap-4">
+                        <div className="min-w-0 space-y-1">
+                          <Label htmlFor="ai-send-bundled" className="text-sm font-bold">
+                            Enviar tudo o mais junto possível
+                          </Label>
+                          <p className="text-xs text-muted-foreground">
+                            Envia uma resposta única; somente textos muito longos são divididos com segurança.
+                          </p>
+                        </div>
+                        <Switch
+                          id="ai-send-bundled"
+                          checked={!!metaSettings.ai_send_bundled}
+                          onCheckedChange={async (val) => {
+                            setMetaSettings((previous: typeof metaSettings) => ({ ...previous, ai_send_bundled: val }));
+                            await handleSaveSettings({ ...metaSettings, ai_send_bundled: val });
+                          }}
+                          aria-label="Enviar respostas da IA o mais junto possível"
+                        />
+                      </CardContent>
+                    </Card>
                   </div>
 
                   {/* RECUPERADOR IA — reengaja conversas paradas usando o mesmo cérebro do agente */}

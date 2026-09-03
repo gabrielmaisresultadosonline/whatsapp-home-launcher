@@ -46,6 +46,14 @@ else
   echo "importação Google sem conflito legado: CÓDIGO ANTIGO"
 fi
 
+if [ "$(q "select count(*) from information_schema.columns where table_schema='public' and table_name='crm_whatsapp_numbers' and column_name='is_primary'" || echo 0)" = "1" ]; then
+  echo "migration 095 / crm_whatsapp_numbers.is_primary: OK"
+else
+  echo "migration 095 / crm_whatsapp_numbers.is_primary: AUSENTE"
+fi
+
+echo "contas Google órfãs (sem user_id): $(q "select count(*) from public.crm_google_accounts where user_id is null" || echo '?')"
+
 echo "contas cadastradas: $(q "select count(*) from public.crm_google_accounts" || echo '?')"
 echo "contatos vinculados ao Google: $(q "select count(*) from public.crm_contacts where google_sync_account_id is not null" || echo '?')"
 echo "contatos CRM pendentes para exportação (todos os cadastros): $(q "select count(*) from public.crm_contacts where google_sync_account_id is null or metadata->>'google_dirty' = 'true'" || echo '?')"

@@ -485,6 +485,8 @@ CREATE TABLE IF NOT EXISTS public.crm_settings (
   initial_response_buttons jsonb DEFAULT '[{"id": "opt_1", "text": "Quero saber mais"}, {"id": "opt_2", "text": "Falar com atendente"}]'::jsonb,
   openai_api_key text,
   ai_agent_enabled boolean DEFAULT false,
+  ai_kanban_auto_organizer boolean DEFAULT false NOT NULL,
+  ai_send_bundled boolean DEFAULT false NOT NULL,
   ai_agent_trigger text DEFAULT 'first_message'::text,
   initial_flow_id uuid,
   shortcut_size integer DEFAULT 100,
