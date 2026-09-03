@@ -724,7 +724,13 @@ const CRM = () => {
   const [recordedAudioUrl, setRecordedAudioUrl] = useState<string | null>(null);
   const [recordedAudioBlob, setRecordedAudioBlob] = useState<Blob | null>(null);
   const recordingTimerRef = useRef<any>(null);
+  // Recursos de gravação mantidos em refs (não em state) para permitir cleanup síncrono e confiável
+  const recorderRef = useRef<any>(null);
+  const micStreamRef = useRef<MediaStream | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const isStartingRecordingRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const messageTextareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [isFlowEditorOpen, setIsFlowEditorOpen] = useState(false);
   const [flowSaveOverlay, setFlowSaveOverlay] = useState<{ open: boolean; done: boolean }>({ open: false, done: false });
