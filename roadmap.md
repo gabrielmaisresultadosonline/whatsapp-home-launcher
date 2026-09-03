@@ -6,6 +6,8 @@
 - [x] Preservar banco, volumes e secrets com backup antes da atualização.
 - [x] Validar a sintaxe dos scripts de implantação.
 - [x] Corrigir o callback Google sem depender de ON CONFLICT e validar a migration 094 no deploy.
-- [x] Adicionar diagnóstico específico e seguro para o OAuth Google na VPS.- [x] Chat: envio de documentos (MIME por extensão no front e na Edge; Meta rejeitava octet-stream).
+- [x] Adicionar diagnóstico específico e seguro para o OAuth Google na VPS.
+- [x] Corrigir importação Google sem ON CONFLICT legado, com paginação e erros explícitos.
+- [x] Chat: envio de documentos (MIME por extensão no front e na Edge; Meta rejeitava octet-stream).
 - [x] Chat: microfone confiável (stream único + AudioContext próprio, fallback MediaRecorder, cleanup total).
 - [x] Chat: seletor de emojis funcional (Popover com categorias/recentes, insere no cursor).

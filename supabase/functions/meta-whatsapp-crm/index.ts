@@ -6425,11 +6425,13 @@ async function fetchAndStoreIncomingMedia(
       
       console.log(`[SYNC] Invocando syncGoogleContacts. accountId: ${accountId || 'recente'}`);
       
-       if (accountId) {
-         const { data } = await supabase.from('crm_google_accounts').select('*').eq('id', accountId).eq('user_id', userId).single();
+        if (accountId) {
+          const { data, error: accountError } = await supabase.from('crm_google_accounts').select('*').eq('id', accountId).eq('user_id', userId).single();
+          if (accountError) throw new Error(`Conta Google não encontrada: ${accountError.message}`);
          account = data;
        } else {
-         const { data } = await supabase.from('crm_google_accounts').select('*').eq('user_id', userId).order('updated_at', { ascending: false }).limit(1).single();
+          const { data, error: accountError } = await supabase.from('crm_google_accounts').select('*').eq('user_id', userId).order('updated_at', { ascending: false }).limit(1).single();
+          if (accountError) throw new Error(`Conta Google não encontrada: ${accountError.message}`);
          account = data;
        }
 
@@ -6468,25 +6470,35 @@ async function fetchAndStoreIncomingMedia(
             updated_at: new Date().toISOString()
           }).eq('id', account.id);
         } else {
-          console.error("[SYNC] Falha ao atualizar token:", refreshTokens);
+          const refreshMessage = refreshTokens?.error_description || refreshTokens?.error || `HTTP ${refreshResponse.status}`;
+          console.error("[SYNC] Falha ao atualizar token:", refreshMessage);
+          await supabase.from('crm_google_accounts').update({
+            connection_status: 'reconnect_required',
+            last_sync_error_code: 'TOKEN_REFRESH_FAILED',
+            last_sync_error: String(refreshMessage).slice(0, 500),
+            last_sync_error_at: new Date().toISOString(),
+          }).eq('id', account.id);
+          throw new Error('A autorização do Google expirou. Reconecte a conta e tente novamente.');
         }
       }
 
       let count = 0;
       let totalFetched = 0;
+      let linkedExisting = 0;
       let nextPageToken = null;
 
       // Conjunto canônico (com 9º dígito) dos números já existentes para este usuário.
       // Sem isto, a sincronização criava DUAS conversas para o mesmo contato
       // (uma com o 9º dígito e outra sem).
       const existingCanonWaIds = new Set<string>();
+      const existingContactsByCanon = new Map<string, { id: string; wa_id: string; name: string | null; source_type: string | null }>();
       {
         let from = 0;
         const pageSize = 1000;
         while (true) {
           const { data: existingRows, error: existingErr } = await supabase
             .from('crm_contacts')
-            .select('wa_id')
+            .select('id, wa_id, name, source_type')
             .eq('user_id', userId)
             .range(from, from + pageSize - 1);
           if (existingErr) {
@@ -6494,7 +6506,11 @@ async function fetchAndStoreIncomingMedia(
             break;
           }
           for (const row of existingRows || []) {
-            existingCanonWaIds.add(canonicalBrazilianWaId(row.wa_id));
+            const canonicalWaId = canonicalBrazilianWaId(row.wa_id);
+            existingCanonWaIds.add(canonicalWaId);
+            if (!existingContactsByCanon.has(canonicalWaId)) {
+              existingContactsByCanon.set(canonicalWaId, row);
+            }
           }
           if (!existingRows || existingRows.length < pageSize) break;
           from += pageSize;
@@ -6515,8 +6531,15 @@ async function fetchAndStoreIncomingMedia(
         
         if (!contactsResponse.ok) {
           const err = await contactsResponse.json().catch(() => ({}));
-          console.error('[SYNC] People API Error:', err);
-          break;
+          const apiMessage = err?.error?.message || `HTTP ${contactsResponse.status}`;
+          console.error('[SYNC] People API Error:', { status: contactsResponse.status, message: apiMessage });
+          await supabase.from('crm_google_accounts').update({
+            connection_status: contactsResponse.status === 401 || contactsResponse.status === 403 ? 'reconnect_required' : 'error',
+            last_sync_error_code: `PEOPLE_API_${contactsResponse.status}`,
+            last_sync_error: String(apiMessage).slice(0, 500),
+            last_sync_error_at: new Date().toISOString(),
+          }).eq('id', account.id);
+          throw new Error(`Google Contatos recusou a sincronização: ${apiMessage}`);
         }
 
         const contactsData = await contactsResponse.json();
@@ -6528,6 +6551,7 @@ async function fetchAndStoreIncomingMedia(
 
         if (connections.length > 0) {
           const upsertBatch = [];
+          const existingUpdateById = new Map<string, Record<string, unknown>>();
           const seenWaIds = new Set();
           
           for (const person of connections) {
@@ -6549,7 +6573,26 @@ async function fetchAndStoreIncomingMedia(
               // Um único registro por contato: sempre a forma canônica do número.
               const canonPhone = canonicalBrazilianWaId(phone);
 
-              // Já existe no banco (em qualquer variante) ou já entrou neste lote? ignora.
+              // Já existe no banco: vincula à conta Google e aproveita o nome,
+              // sem criar uma segunda conversa para o mesmo telefone.
+              const existingContact = existingContactsByCanon.get(canonPhone);
+              if (existingContact) {
+                if (!seenWaIds.has(canonPhone)) {
+                  existingUpdateById.set(existingContact.id, {
+                    id: existingContact.id,
+                    wa_id: existingContact.wa_id,
+                    user_id: userId,
+                    name: name || existingContact.name,
+                    source_type: existingContact.source_type || 'system',
+                    google_sync_account_id: account.id,
+                    updated_at: new Date().toISOString(),
+                  });
+                }
+                seenWaIds.add(canonPhone);
+                continue;
+              }
+
+              // Já entrou neste lote ou foi inserido por uma página anterior.
               if (existingCanonWaIds.has(canonPhone) || seenWaIds.has(canonPhone)) {
                 continue;
               }
@@ -6560,26 +6603,59 @@ async function fetchAndStoreIncomingMedia(
                 name: name || null,
                 google_sync_account_id: account.id,
                 user_id: userId,
+                source_type: 'google',
                 updated_at: new Date().toISOString()
               });
             }
           }
 
-          if (upsertBatch.length > 0) {
-            console.log(`[SYNC] Tentando upsert de batch com ${upsertBatch.length} registros únicos...`);
-            const { error: upsertError } = await supabase.from('crm_contacts').upsert(upsertBatch, { onConflict: 'wa_id,user_id' });
-            if (!upsertError) {
-              count += upsertBatch.length;
-            } else {
-              console.error('[SYNC] Upsert Error:', upsertError);
+          const existingUpdateBatch = Array.from(existingUpdateById.values());
+          if (existingUpdateBatch.length > 0) {
+            const { error: updateError } = await supabase
+              .from('crm_contacts')
+              .upsert(existingUpdateBatch, { onConflict: 'id' });
+            if (updateError) {
+              console.error('[SYNC] Existing contact link error:', updateError);
+              throw new Error(`Não foi possível vincular os contatos existentes ao Google: ${updateError.message}`);
             }
+            linkedExisting += existingUpdateBatch.length;
+            count += existingUpdateBatch.length;
+          }
+
+          if (upsertBatch.length > 0) {
+            // Não usar upsert ON CONFLICT (wa_id,user_id): essa constraint foi
+            // removida pela migration 089 para permitir o mesmo contato em
+            // caixas WhatsApp diferentes. O conjunto canônico acima elimina
+            // existentes e duplicados antes da inserção.
+            console.log(`[SYNC] Inserindo lote com ${upsertBatch.length} registros únicos...`);
+            const { error: insertError } = await supabase.from('crm_contacts').insert(upsertBatch);
+            if (insertError) {
+              console.error('[SYNC] Insert Error:', insertError);
+              await supabase.from('crm_google_accounts').update({
+                connection_status: 'error',
+                last_sync_error_code: insertError.code || 'CONTACT_INSERT_FAILED',
+                last_sync_error: String(insertError.message || insertError).slice(0, 500),
+                last_sync_error_at: new Date().toISOString(),
+              }).eq('id', account.id);
+              throw new Error(`Não foi possível gravar os contatos Google: ${insertError.message}`);
+            }
+            for (const inserted of upsertBatch) existingCanonWaIds.add(inserted.wa_id);
+            count += upsertBatch.length;
           }
         }
       } while (nextPageToken);
 
-      console.log(`[SYNC] Finalizado. Total de conexões People API: ${totalFetched}. Total de registros/upserts em crm_contacts: ${count}`);
+      console.log(`[SYNC] Finalizado. Conexões People API: ${totalFetched}. Processados: ${count}. Existentes vinculados: ${linkedExisting}.`);
 
-      return new Response(JSON.stringify({ success: true, count, totalFetched }), {
+      await supabase.from('crm_google_accounts').update({
+        connection_status: 'active',
+        last_sync_error_code: null,
+        last_sync_error: null,
+        last_sync_error_at: null,
+        updated_at: new Date().toISOString(),
+      }).eq('id', account.id);
+
+      return new Response(JSON.stringify({ success: true, count, totalFetched, linkedExisting }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }

@@ -39,15 +39,23 @@ else
   echo "callback Google sem ON CONFLICT: CÓDIGO ANTIGO"
 fi
 
+if grep -q "Não usar upsert ON CONFLICT (wa_id,user_id)" "$ROOT/supabase/functions/meta-whatsapp-crm/index.ts" \
+  && ! grep -q "upsert(upsertBatch, { onConflict: 'wa_id,user_id' })" "$ROOT/supabase/functions/meta-whatsapp-crm/index.ts"; then
+  echo "importação Google sem conflito legado: OK"
+else
+  echo "importação Google sem conflito legado: CÓDIGO ANTIGO"
+fi
+
 echo "contas cadastradas: $(q "select count(*) from public.crm_google_accounts" || echo '?')"
+echo "contatos vinculados ao Google: $(q "select count(*) from public.crm_contacts where google_sync_account_id is not null" || echo '?')"
 echo
-echo "Últimos eventos OAuth (30 min):"
+echo "Últimos eventos OAuth/Sync (30 min):"
 docker logs --since 30m "$FN_CONTAINER" 2>&1 \
-  | grep -aiE '\[OAUTH|exchangeGoogleCode|unique or exclusion constraint|crm_google_accounts' \
+  | grep -aiE '\[OAUTH|\[SYNC|exchangeGoogleCode|syncGoogleContacts|unique or exclusion constraint|crm_google_accounts|People API' \
   | tail -n 100 || true
 
 echo
-echo "Escuta OAuth por ${SEGUNDOS}s — conecte a conta Google agora:"
+echo "Escuta OAuth/Sync por ${SEGUNDOS}s — conecte ou sincronize a conta Google agora:"
 timeout "$SEGUNDOS" docker logs -f --since 2s "$FN_CONTAINER" 2>&1 \
-  | grep -aiE '\[OAUTH|exchangeGoogleCode|unique or exclusion constraint|crm_google_accounts' \
+  | grep -aiE '\[OAUTH|\[SYNC|exchangeGoogleCode|syncGoogleContacts|unique or exclusion constraint|crm_google_accounts|People API' \
   || true
