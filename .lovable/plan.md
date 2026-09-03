@@ -1,34 +1,33 @@
-# Corrigir prévia de mídia no fluxo + animação ao salvar
+# Agente IA: Kanban, formato de envio e sincronização Google
 
-## Problema 1 — imagens/vídeos quebrados na prévia do fluxo
+## Objetivo
+Adicionar duas opções independentes ao Agente IA sem alterar os padrões atuais e corrigir as falhas que impedem a importação de contatos Google.
 
-As mídias do fluxo são gravadas com a URL pública do Storage no momento do upload. Depois da migração para a VPS, essas URLs antigas (`*.supabase.co` ou host interno `gateway:8000`) não existem mais no navegador — por isso a prévia aparece como imagem quebrada, mesmo com o arquivo presente.
+## Implementação
+1. **Configurações do Agente IA**
+   - Adicionar abaixo de “Ativar geral” os controles “Organizador Kanban CRM automático” e “Enviar tudo o mais junto possível”.
+   - Manter ambos desativados por padrão, preservando o comportamento atual.
+   - Persistir as opções em `crm_settings` e incluí-las na leitura/salvamento seguro da tela.
 
-Já existe a função `resolveMediaUrl()` (`src/lib/mediaUrl.ts`) que reescreve esses casos para o Storage atual. O chat do CRM já a usa; o editor de fluxos e a prévia estilo WhatsApp **não**.
+2. **Organizador automático do Kanban**
+   - Quando ativado, permitir que o agente classifique a conversa em uma das categorias: frio, quente, cliente ou quer falar com humano.
+   - Resolver cada categoria para um status Kanban do próprio usuário e mover somente o contato daquela conversa.
+   - Não mover contatos quando a opção estiver desativada ou quando não houver classificação confiável/status correspondente.
 
-Correção: aplicar `resolveMediaUrl()` em todo `src`/`poster` de mídia dentro do fluxo:
-- `src/components/crm/FlowEditor.tsx` — nós de imagem/vídeo (miniatura no canvas), painel lateral de pergunta/imagem/vídeo, cartões do carrossel.
-- `src/components/crm/WhatsAppFlowPreview.tsx` — `imageUrl`, `videoUrl` e `cards[].mediaUrl`.
+3. **Formato das respostas**
+   - Com a nova opção desativada, manter o envio fragmentado existente.
+   - Quando ativada, consolidar a resposta do agente e enviar em uma única mensagem sempre que o limite do WhatsApp permitir; usar divisão segura apenas quando tecnicamente necessário.
 
-Adicionalmente, quando a imagem falhar mesmo assim, mostrar um estado visual claro ("mídia indisponível") em vez do ícone quebrado do navegador, usando `onError` com token semântico.
+4. **Sincronização Google**
+   - Criar migration corretiva idempotente para remover a referência inválida a `crm_whatsapp_numbers.is_primary` da função/trigger de preenchimento do número.
+   - Impedir consultas UUID com `userId` nulo no diagnóstico/exportação e retornar erro explícito quando a ação autenticada não tiver usuário válido.
+   - Incluir a nova migration na validação do deploy e no diagnóstico seguro.
 
-## Problema 2 — salvar parece não atualizar
+5. **Validação**
+   - Verificar TypeScript, sintaxe Bash, SQL/migrations e ausência dos conflitos Google legados.
+   - Testar na interface a presença e persistência visual dos dois controles, sem alterar os demais recursos.
 
-Hoje o `onSave` fecha o editor na hora e chama `fetchData(false)`, que recarrega **todos** os dados do CRM (contatos, mensagens, agendamentos…). Por isso demora ~3s e, se o fluxo for reaberto logo em seguida, ainda vem a versão antiga.
-
-Correção em `src/pages/CRM.tsx` (`handleSaveFlow`):
-1. Mostrar um overlay bloqueante com ícone do WhatsApp animado e barra de progresso enquanto salva.
-2. Após o `update`/`insert`, recarregar **apenas** `crm_flows` (consulta escopada, não `fetchData` inteiro) e atualizar o estado local — isso deixa o salvar bem mais rápido e garante que o fluxo reaberto já esteja atualizado.
-3. Só então fechar o overlay e o editor, com uma pequena transição de "Salvo!" para não confundir.
-
-## Novo componente
-
-`src/components/crm/FlowSaveOverlay.tsx` — overlay de tela cheia:
-- ícone do WhatsApp com pulso/ping suave;
-- barra de progresso animada que avança durante o salvamento e completa em 100% ao terminar;
-- estados: `Salvando fluxo...` → `Fluxo salvo!`, fechando sozinho.
-- Tokens semânticos e `cn()`, mobile-first, com `role="status"` e `aria-live`.
-
-## Escopo
-
-Nada além disso é alterado: lógica de nós, envio, webhooks e demais telas ficam intactas.
+## Detalhes técnicos
+- Banco PostgreSQL próprio da stack atual; migration nova após a 094, com execução idempotente pelo `atualizar.sh`.
+- Defaults compatíveis: organizador `false`, envio agrupado `false`.
+- Sem expor tokens, chaves ou conteúdo sensível nos logs.
