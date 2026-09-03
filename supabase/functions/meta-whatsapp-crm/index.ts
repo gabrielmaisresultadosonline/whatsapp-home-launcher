@@ -6484,19 +6484,21 @@ async function fetchAndStoreIncomingMedia(
 
       let count = 0;
       let totalFetched = 0;
+      let linkedExisting = 0;
       let nextPageToken = null;
 
       // Conjunto canônico (com 9º dígito) dos números já existentes para este usuário.
       // Sem isto, a sincronização criava DUAS conversas para o mesmo contato
       // (uma com o 9º dígito e outra sem).
       const existingCanonWaIds = new Set<string>();
+      const existingContactsByCanon = new Map<string, { id: string; wa_id: string; name: string | null; source_type: string | null }>();
       {
         let from = 0;
         const pageSize = 1000;
         while (true) {
           const { data: existingRows, error: existingErr } = await supabase
             .from('crm_contacts')
-            .select('wa_id')
+            .select('id, wa_id, name, source_type')
             .eq('user_id', userId)
             .range(from, from + pageSize - 1);
           if (existingErr) {
@@ -6504,7 +6506,11 @@ async function fetchAndStoreIncomingMedia(
             break;
           }
           for (const row of existingRows || []) {
-            existingCanonWaIds.add(canonicalBrazilianWaId(row.wa_id));
+            const canonicalWaId = canonicalBrazilianWaId(row.wa_id);
+            existingCanonWaIds.add(canonicalWaId);
+            if (!existingContactsByCanon.has(canonicalWaId)) {
+              existingContactsByCanon.set(canonicalWaId, row);
+            }
           }
           if (!existingRows || existingRows.length < pageSize) break;
           from += pageSize;
@@ -6545,6 +6551,7 @@ async function fetchAndStoreIncomingMedia(
 
         if (connections.length > 0) {
           const upsertBatch = [];
+          const existingUpdateById = new Map<string, Record<string, unknown>>();
           const seenWaIds = new Set();
           
           for (const person of connections) {
@@ -6566,7 +6573,26 @@ async function fetchAndStoreIncomingMedia(
               // Um único registro por contato: sempre a forma canônica do número.
               const canonPhone = canonicalBrazilianWaId(phone);
 
-              // Já existe no banco (em qualquer variante) ou já entrou neste lote? ignora.
+              // Já existe no banco: vincula à conta Google e aproveita o nome,
+              // sem criar uma segunda conversa para o mesmo telefone.
+              const existingContact = existingContactsByCanon.get(canonPhone);
+              if (existingContact) {
+                if (!seenWaIds.has(canonPhone)) {
+                  existingUpdateById.set(existingContact.id, {
+                    id: existingContact.id,
+                    wa_id: existingContact.wa_id,
+                    user_id: userId,
+                    name: name || existingContact.name,
+                    source_type: existingContact.source_type || 'system',
+                    google_sync_account_id: account.id,
+                    updated_at: new Date().toISOString(),
+                  });
+                }
+                seenWaIds.add(canonPhone);
+                continue;
+              }
+
+              // Já entrou neste lote ou foi inserido por uma página anterior.
               if (existingCanonWaIds.has(canonPhone) || seenWaIds.has(canonPhone)) {
                 continue;
               }
@@ -6581,6 +6607,19 @@ async function fetchAndStoreIncomingMedia(
                 updated_at: new Date().toISOString()
               });
             }
+          }
+
+          const existingUpdateBatch = Array.from(existingUpdateById.values());
+          if (existingUpdateBatch.length > 0) {
+            const { error: updateError } = await supabase
+              .from('crm_contacts')
+              .upsert(existingUpdateBatch, { onConflict: 'id' });
+            if (updateError) {
+              console.error('[SYNC] Existing contact link error:', updateError);
+              throw new Error(`Não foi possível vincular os contatos existentes ao Google: ${updateError.message}`);
+            }
+            linkedExisting += existingUpdateBatch.length;
+            count += existingUpdateBatch.length;
           }
 
           if (upsertBatch.length > 0) {
@@ -6606,7 +6645,7 @@ async function fetchAndStoreIncomingMedia(
         }
       } while (nextPageToken);
 
-      console.log(`[SYNC] Finalizado. Total de conexões People API: ${totalFetched}. Total de registros/upserts em crm_contacts: ${count}`);
+      console.log(`[SYNC] Finalizado. Conexões People API: ${totalFetched}. Processados: ${count}. Existentes vinculados: ${linkedExisting}.`);
 
       await supabase.from('crm_google_accounts').update({
         connection_status: 'active',
@@ -6616,7 +6655,7 @@ async function fetchAndStoreIncomingMedia(
         updated_at: new Date().toISOString(),
       }).eq('id', account.id);
 
-      return new Response(JSON.stringify({ success: true, count, totalFetched }), {
+      return new Response(JSON.stringify({ success: true, count, totalFetched, linkedExisting }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }

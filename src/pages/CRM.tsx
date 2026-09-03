@@ -2715,7 +2715,7 @@ const CRM = () => {
         console.log('[SYNC] Sincronização concluída com sucesso:', data);
         toast({ 
           title: "Sincronização concluída!", 
-          description: `${data.count} números processados de ${data.totalFetched || 0} contatos Google.` 
+           description: `${data.count} números processados de ${data.totalFetched || 0} contatos Google${data.linkedExisting ? ` (${data.linkedExisting} já existentes foram vinculados)` : ''}.` 
         });
         
         // Atualiza a lista local de contatos
