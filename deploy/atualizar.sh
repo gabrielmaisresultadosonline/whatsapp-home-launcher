@@ -268,6 +268,12 @@ else
     erros=$(grep -ciE '^psql:.*(ERROR|FATAL)' "/tmp/zapmro-sql-$nome.log" || true)
     graves=$(grep -iE '^psql:.*(ERROR|FATAL)' "/tmp/zapmro-sql-$nome.log" \
              | grep -viE 'already exists|does not exist, skipping|duplicate key|multiple primary keys|is not a|violates' | wc -l || true)
+    # A migration do OAuth é corretiva: qualquer erro nela (inclusive FK ou
+    # duplicidade) significa que a UNIQUE não foi garantida e deve ser tentada
+    # novamente. Não permita que seja marcada como aplicada silenciosamente.
+    if [ "$nome" = "094-google-accounts-unique.sql" ]; then
+      graves="${erros:-0}"
+    fi
     if [ "${erros:-0}" -gt 0 ]; then
       warn "  ${erros} aviso(s)/erro(s) em $nome → /tmp/zapmro-sql-$nome.log"
       grep -iE '^psql:.*(ERROR|FATAL)' "/tmp/zapmro-sql-$nome.log" | sort -u | head -3 | sed 's/^/      /' || true
