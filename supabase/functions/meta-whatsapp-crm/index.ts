@@ -2881,6 +2881,7 @@ async function pushPendingContactsToGoogle(supabase: any, userId: string, settin
   }
 
   if (!claimedContacts || claimedContacts.length === 0) {
+    console.log(`[GOOGLE-SYNC] Nenhum contato CRM pendente para exportação. userId: ${userId}`);
     return {
       success: true,
       pushed: 0,
@@ -6716,6 +6717,7 @@ async function fetchAndStoreIncomingMedia(
 
     if (action === 'syncPendingToGoogle') {
       const targetAccountId: string | undefined = params?.targetAccountId;
+      console.log(`[GOOGLE-SYNC] Solicitação de exportação recebida. targetAccountId: ${targetAccountId || 'automático'}`);
       // Push contacts that are NOT yet on Google up to active Google accounts.
       // Does NOT pull from Google (avoid duplication caused by re-importing).
       const { data: accounts } = await supabase
@@ -6725,6 +6727,7 @@ async function fetchAndStoreIncomingMedia(
         .order('updated_at', { ascending: false });
 
       if (!accounts || accounts.length === 0) {
+        console.warn('[GOOGLE-SYNC] Exportação recusada: nenhuma conta Google conectada para o usuário.');
         return jsonResponse({ success: false, error: 'Nenhuma conta Google conectada' });
       }
 
@@ -6734,6 +6737,7 @@ async function fetchAndStoreIncomingMedia(
         ? accounts.filter((a: any) => a.id === targetAccountId)
         : accounts;
       if (scoped.length === 0) {
+        console.warn(`[GOOGLE-SYNC] Exportação recusada: conta de destino ${targetAccountId || 'não informada'} não encontrada.`);
         return jsonResponse({ success: false, error: 'Conta Google de destino não encontrada' }, 400);
       }
       const ordered = [...scoped].sort(

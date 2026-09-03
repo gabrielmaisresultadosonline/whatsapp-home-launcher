@@ -2693,7 +2693,7 @@ const CRM = () => {
     }
   };
 
-  const handleSyncGoogleContacts = async () => {
+  const handleSyncGoogleContacts = async (accountId?: string) => {
     if (!googleContactsEnabled) {
       handleConnectGoogle();
       return;
@@ -2705,7 +2705,7 @@ const CRM = () => {
     try {
       // Inicia a sincronização chamando a função
       const { data, error } = await supabase.functions.invoke('meta-whatsapp-crm', {
-        body: { action: 'syncGoogleContacts' }
+        body: { action: 'syncGoogleContacts', accountId }
       });
       
       if (error) throw error;
@@ -2757,6 +2757,9 @@ const CRM = () => {
         body: { action: 'syncPendingToGoogle', targetAccountId }
       });
       if (error) throw error;
+      if (!data?.success) {
+        throw new Error(data?.error || 'A exportação não foi iniciada pelo servidor.');
+      }
 
       if (data?.requiresReconnect) {
         toast({
@@ -8715,7 +8718,17 @@ const CRM = () => {
                                 </div>
                               </div>
 
-                              <div className="flex items-center gap-2 flex-shrink-0">
+                              <div className="flex items-center gap-2 flex-shrink-0 flex-wrap justify-end">
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-8 px-2 text-[10px] font-bold"
+                                  disabled={isSyncingContacts}
+                                  onClick={() => handleSyncGoogleContacts(acc.id)}
+                                >
+                                  <Download className="w-3.5 h-3.5 mr-1" />
+                                  IMPORTAR
+                                </Button>
                                 <Button
                                   variant="outline"
                                   size="sm"

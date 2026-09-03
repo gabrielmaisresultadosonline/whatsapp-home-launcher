@@ -11,3 +11,4 @@
 - [x] Chat: envio de documentos (MIME por extensão no front e na Edge; Meta rejeitava octet-stream).
 - [x] Chat: microfone confiável (stream único + AudioContext próprio, fallback MediaRecorder, cleanup total).
 - [x] Chat: seletor de emojis funcional (Popover com categorias/recentes, insere no cursor).
+- [x] Google Contatos: ligar a importação ao botão da conta, não mascarar erros como 0/0 e registrar exportações no diagnóstico.
