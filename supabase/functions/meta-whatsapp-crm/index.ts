@@ -1,6 +1,12 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.42.0"
 import { executeVisualNode, processStep } from "../_shared/flow-executor.ts"
+import {
+  buildServerTemplateComponents,
+  parseServerTemplateSchema,
+  summarizeSentComponents,
+  validateComponentsAgainstSchema,
+} from "../_shared/template-variables.ts"
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const META_GRAPH_API_VERSION = 'v25.0';
@@ -1606,12 +1612,21 @@ async function handleProcessWebhook(supabase: any, entry: any, skipSave = false,
     }
   }
 
+  // Metadados do clique em botão de template (resposta rápida) — gravados no
+  // histórico para o CRM identificar contato, template, botão e horário.
+  let templateButtonMeta: Record<string, any> | null = null;
+
   if (message.type === 'text') {
     text = extractedInboundText || message.text.body;
   } else if (message.type === 'interactive') {
     if (message.interactive.type === 'button_reply') {
       buttonId = message.interactive.button_reply.id;
       text = extractedInboundText || message.interactive.button_reply.title;
+      templateButtonMeta = {
+        interactive_button_id: message.interactive.button_reply.id || null,
+        interactive_button_title: message.interactive.button_reply.title || null,
+        template_context_message_id: message.context?.id || null,
+      };
     }
   } else if (['image', 'video', 'ptv', 'audio', 'voice', 'sticker', 'document'].includes(message.type)) {
     const node = message[message.type] || {};
@@ -1651,7 +1666,34 @@ else if (message.type === "unsupported") {
   } else if (message.type === "contacts") {
     text = `[Contato] ${message.contacts?.[0]?.name?.formatted_name || "Compartilhado"}`;
   } else if (message.type === "button") {
+    // Clique em botão de RESPOSTA RÁPIDA de um template aprovado.
+    // A Meta envia { button: { text, payload }, context: { id } } — o context
+    // aponta para a mensagem de template que originou o clique.
     text = message.button?.text || "[Botão]";
+    templateButtonMeta = {
+      template_button_text: message.button?.text || null,
+      template_button_payload: message.button?.payload || message.button?.text || null,
+      template_context_message_id: message.context?.id || null,
+      template_button_clicked_at: message?.timestamp ? new Date(Number(message.timestamp) * 1000).toISOString() : new Date().toISOString(),
+    };
+    try {
+      if (message.context?.id) {
+        const { data: originMessage } = await supabase
+          .from('crm_messages')
+          .select('id, metadata')
+          .eq('meta_message_id', message.context.id)
+          .eq('user_id', userId)
+          .maybeSingle();
+        if (originMessage) {
+          templateButtonMeta.template_origin_message_id = originMessage.id;
+          templateButtonMeta.template_name = originMessage.metadata?.template_name || null;
+          templateButtonMeta.template_id = originMessage.metadata?.template_id || null;
+        }
+      }
+    } catch (originErr) {
+      console.warn('[WEBHOOK] Não foi possível localizar o template de origem do botão:', (originErr as any)?.message);
+    }
+    console.log('[WEBHOOK] Template quick reply recebido', { waId, button: templateButtonMeta.template_button_text, template: templateButtonMeta.template_name || null });
   } else if (message.type === "reaction") {
     text = `[Reação] ${message.reaction?.emoji || ""}`;
   }
@@ -1781,7 +1823,7 @@ else if (message.type === "unsupported") {
        status: 'received',
        meta_message_id: message.id,
        media_url: mediaUrlForSave,
-      metadata: { raw: message, referral: getReferralFromWebhookMessage(message) },
+      metadata: { raw: message, referral: getReferralFromWebhookMessage(message), ...(templateButtonMeta || {}) },
        user_id: userId,
        // Preserve real send order: webhook batches may arrive out-of-order, so
        // we honor Meta's per-message timestamp instead of the DB insertion time.
@@ -4104,6 +4146,9 @@ async function internalSendTemplate(
   broadcastId?: string
 ) {
   let dbTemplate: any = null;
+  // Linha do template no banco (id/idioma/componentes) — usada para validar a
+  // estrutura enviada e registrar os parâmetros no histórico.
+  let approvedTemplateRow: any = null;
   const normalizedTo = normalizePhone(to)
   
   const payload: any = {
@@ -4125,10 +4170,11 @@ async function internalSendTemplate(
   try {
     const { data: statusRow } = await supabase
       .from('crm_templates')
-      .select('status, language')
+      .select('id, status, language, components, is_carousel')
       .eq('name', templateName)
       .eq('user_id', contact?.user_id)
       .maybeSingle();
+    approvedTemplateRow = statusRow || null;
 
     const tplStatus = String(statusRow?.status || '').toUpperCase();
     if (statusRow && tplStatus !== 'APPROVED') {
@@ -4344,6 +4390,52 @@ async function internalSendTemplate(
     }
   }
 
+  // ---- VALIDAÇÃO ESTRUTURAL: componentes enviados x estrutura aprovada ----
+  // Só se aplica quando o app mandou componentes explicitamente (variáveis
+  // preenchidas). O fallback legado (sem componentes) mantém o comportamento
+  // anterior para fluxos e automações antigas.
+  if (approvedTemplateRow && Array.isArray(manualComponents) && manualComponents.length > 0 && !approvedTemplateRow.is_carousel) {
+    const schema = parseServerTemplateSchema(approvedTemplateRow.components);
+    const structureIssues = validateComponentsAgainstSchema(schema, manualComponents);
+    const approvedLanguage = String(approvedTemplateRow.language || '').trim();
+    if (approvedLanguage && languageCode && approvedLanguage !== languageCode) {
+      structureIssues.unshift({
+        code: 'TEMPLATE_LANGUAGE_MISMATCH',
+        message: `O idioma informado (${languageCode}) não corresponde ao idioma aprovado (${approvedLanguage}).`,
+      });
+    }
+    if (structureIssues.length > 0) {
+      const normalizedError = {
+        code: structureIssues[0].code,
+        message: structureIssues.map(i => i.message).join(' '),
+        details: `template=${templateName} issues=${structureIssues.map(i => i.code).join(',')}`,
+      };
+      if (contact) {
+        await supabase.from('crm_messages').insert({
+          contact_id: contact.id,
+          user_id: contact.user_id || null,
+          ...(contact.whatsapp_number_id ? { whatsapp_number_id: contact.whatsapp_number_id } : {}),
+          direction: 'outbound',
+          message_type: 'template',
+          content: `[Template: ${templateName}]`,
+          status: 'failed',
+          error_code: normalizedError.code,
+          error_message: normalizedError.message,
+          metadata: {
+            template_name: templateName,
+            template_id: approvedTemplateRow.id || null,
+            language: languageCode,
+            broadcast_id: broadcastId || null,
+            ...summarizeSentComponents(manualComponents),
+            validation_issues: structureIssues,
+          },
+        });
+      }
+      console.warn(`[TEMPLATE-VALIDATION] Bloqueado: ${normalizedError.details}`);
+      return jsonResponse({ success: false, ...normalizedError }, 200);
+    }
+  }
+
   console.log(`[TEMPLATE] Sending template ${templateName} to ${normalizedTo}`);
   console.log(`[TEMPLATE-PAYLOAD]`, JSON.stringify(payload));
 
@@ -4450,8 +4542,12 @@ async function internalSendTemplate(
       meta_message_id: result?.messages?.[0]?.id || null,
       metadata: { 
         template_name: templateName,
+        template_id: approvedTemplateRow?.id || null,
+        language: languageCode,
         source: 'api_automation',
         broadcast_id: broadcastId || null,
+        ...summarizeSentComponents(payload.template.components),
+        meta_raw_response: result || null,
         ...(carouselMetadata || {})
       }
     }).select().single()
@@ -5896,7 +5992,8 @@ async function fetchAndStoreIncomingMedia(
     }
 
     if (action === 'sendTemplate') {
-      const { to, templateName, languageCode, components: manualComponents } = params
+      const { to, templateName, languageCode } = params
+      let manualComponents: any[] | undefined = Array.isArray(params.components) ? params.components : undefined;
       const normalizedTo = normalizePhone(to);
       const variants = getBrazilianPhoneVariants(normalizedTo);
 
@@ -5976,6 +6073,23 @@ async function fetchAndStoreIncomingMedia(
         }, 200);
       }
 
+      // Agendamentos/automações podem mandar `templateConfig` (mídia + valores
+      // das variáveis com campos do contato). Montamos os componentes aqui,
+      // já resolvidos para o contato real do envio.
+      if ((!manualComponents || manualComponents.length === 0) && params.templateConfig && typeof params.templateConfig === 'object') {
+        const { data: templateRowForConfig } = await supabase
+          .from('crm_templates')
+          .select('components, is_carousel, language')
+          .eq('name', templateName)
+          .eq('user_id', contact.user_id || userId)
+          .maybeSingle();
+        if (templateRowForConfig?.components && !templateRowForConfig.is_carousel) {
+          const schema = parseServerTemplateSchema(templateRowForConfig.components);
+          manualComponents = buildServerTemplateComponents(schema, params.templateConfig, contact);
+          console.log(`[TEMPLATE] Componentes montados a partir de templateConfig para ${normalizedTo}:`, manualComponents.length);
+        }
+      }
+
       const { contactId: providedContactId, broadcastId } = params;
       const response = await internalSendTemplate(
         supabase, 
@@ -5984,7 +6098,7 @@ async function fetchAndStoreIncomingMedia(
         to, 
         templateName, 
         languageCode || 'pt_BR', 
-        manualComponents, 
+        manualComponents || [], 
         { ...contact, whatsapp_number_id: contact.whatsapp_number_id || templateNumberId || null },
         null,
         providedContactId,

@@ -89,7 +89,8 @@ import {
      History as HistoryIcon,
      BookOpen,
      ChevronUp,
-     ChevronDown
+     ChevronDown,
+     Braces
    } from "lucide-react";
 import * as LucideIcons from 'lucide-react';
 const Instagram = (LucideIcons as any).Instagram || Camera;
@@ -102,6 +103,17 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import TemplateBuilder from "@/components/whatsapp/TemplateBuilder";
+import TemplateVariablesDialog, { loadDefaultTemplatePreset } from "@/components/whatsapp/TemplateVariablesDialog";
+import {
+  TemplateSendConfig,
+  buildTemplateComponents,
+  countDynamicInputs,
+  createDefaultSendConfig,
+  normalizeSendConfig,
+  parseTemplateSchema,
+  templateHasDynamicInputs,
+  validateTemplateSendConfig,
+} from "@/lib/templateVariables";
 import FlowEditor from "@/components/crm/FlowEditor";
 import { FlowSaveOverlay } from "@/components/crm/FlowSaveOverlay";
 import { MediaPopup } from "@/components/MediaPopup";
@@ -744,6 +756,9 @@ const CRM = () => {
   const [editingFlow, setEditingFlow] = useState<any>(null);
   const [uploadType, setUploadType] = useState<'image' | 'video' | 'audio' | 'document' | null>(null);
   const [countdown, setCountdown] = useState<number | null>(null);
+  // Editor de variáveis de template (agendamento / padrão do template).
+  const [templateVariablesTarget, setTemplateVariablesTarget] = useState<{ template: any; purpose: 'schedule' | 'default' } | null>(null);
+  const [scheduleTemplateConfig, setScheduleTemplateConfig] = useState<TemplateSendConfig | null>(null);
   const [confirmSend, setConfirmSend] = useState<{
     type: 'template' | 'flow';
     id: string;
@@ -3410,8 +3425,18 @@ const CRM = () => {
       if (scheduleType === 'message') payload.text = newMessage;
       else if (scheduleType === 'template') {
         const t = templates.find(temp => temp.id === selectedScheduleId);
+        const issue = templateSendIssue(t, scheduleTemplateConfig);
+        if (issue) {
+          toast({ title: "Complete as variáveis do template", description: issue, variant: "destructive" });
+          setTemplateVariablesTarget({ template: t, purpose: 'schedule' });
+          setIsScheduling(false);
+          return;
+        }
         payload.templateName = t?.name;
         payload.language = t?.language || 'pt_BR';
+        payload.languageCode = t?.language || 'pt_BR';
+        const resolvedConfig = await resolveTemplateSendConfig(t, scheduleTemplateConfig);
+        if (resolvedConfig) payload.templateConfig = resolvedConfig;
       } else if (scheduleType === 'flow') {
         payload.flowId = selectedScheduleId;
       }
@@ -3482,11 +3507,21 @@ const CRM = () => {
       // 2. Criar agendamento (Apenas template para novos contatos/lista fria)
       const scheduledFor = new Date(`${scheduleDate}T${scheduleTime}`).toISOString();
       const t = templates.find(temp => temp.id === selectedScheduleId);
+      const birthdayIssue = templateSendIssue(t, scheduleTemplateConfig);
+      if (birthdayIssue) {
+        toast({ title: "Complete as variáveis do template", description: birthdayIssue, variant: "destructive" });
+        setTemplateVariablesTarget({ template: t, purpose: 'schedule' });
+        setIsScheduling(false);
+        return;
+      }
+      const birthdayConfig = await resolveTemplateSendConfig(t, scheduleTemplateConfig);
       
-      const payload = {
+      const payload: any = {
         action: 'sendTemplate',
         templateName: t?.name,
-        language: t?.language || 'pt_BR'
+        language: t?.language || 'pt_BR',
+        languageCode: t?.language || 'pt_BR',
+        ...(birthdayConfig ? { templateConfig: birthdayConfig } : {}),
       };
 
       const { error: scheduleError } = await supabase.from('crm_scheduled_messages').insert({
@@ -4492,7 +4527,21 @@ const CRM = () => {
           setIsScheduling(false);
           return;
         }
-        messageData = { action: 'sendTemplate', templateName: selectedScheduleId, languageCode: 'pt_BR' };
+        const scheduledTemplate = templates.find(temp => temp.id === selectedScheduleId || temp.name === selectedScheduleId);
+        const scheduledIssue = templateSendIssue(scheduledTemplate, scheduleTemplateConfig);
+        if (scheduledIssue) {
+          toast({ title: "Complete as variáveis do template", description: scheduledIssue, variant: "destructive" });
+          setTemplateVariablesTarget({ template: scheduledTemplate, purpose: 'schedule' });
+          setIsScheduling(false);
+          return;
+        }
+        const scheduledConfig = await resolveTemplateSendConfig(scheduledTemplate, scheduleTemplateConfig);
+        messageData = {
+          action: 'sendTemplate',
+          templateName: scheduledTemplate?.name || selectedScheduleId,
+          languageCode: scheduledTemplate?.language || 'pt_BR',
+          ...(scheduledConfig ? { templateConfig: scheduledConfig } : {}),
+        };
       } else if (scheduleType === 'flow') {
         if (isColdList) {
           toast({ 
@@ -4551,6 +4600,28 @@ const CRM = () => {
     }
   };
 
+  /**
+   * Resolve a configuração de envio de um template: usa a configuração passada
+   * ou o padrão salvo no CRM; retorna null quando o template não é dinâmico.
+   */
+  const resolveTemplateSendConfig = async (template: any, override?: TemplateSendConfig | null): Promise<TemplateSendConfig | null> => {
+    if (!template) return null;
+    const schema = parseTemplateSchema(template.components);
+    if (!templateHasDynamicInputs(schema)) return null;
+    if (override) return normalizeSendConfig(override, schema);
+    const preset = await loadDefaultTemplatePreset(template.id);
+    return normalizeSendConfig(preset, schema);
+  };
+
+  /** Valida antes de agendar/enviar; devolve a primeira pendência ou null. */
+  const templateSendIssue = (template: any, config: TemplateSendConfig | null): string | null => {
+    if (!template) return null;
+    const schema = parseTemplateSchema(template.components);
+    if (!templateHasDynamicInputs(schema)) return null;
+    const issues = validateTemplateSendConfig(schema, config || createDefaultSendConfig(schema), null, template.status);
+    return issues[0]?.message || null;
+  };
+
   const handleSendTemplate = async (templateName: string, language: string) => {
     if (!selectedContact || isSending(selectedContact.id)) return;
     const targetContactId = selectedContact.id;
@@ -4571,51 +4642,18 @@ const CRM = () => {
         await updateContactStatus(targetContactId, { ai_active: false });
       }
       
-      const components: any[] = [];
-      const bodyComponent = template?.components?.find((c: any) => c.type === 'BODY');
-      const headerComponent = template?.components?.find((c: any) => c.type === 'HEADER');
-      
-      if (headerComponent) {
-        if (headerComponent.format === 'IMAGE') {
-          const handleOrUrl = headerComponent.example?.header_handle?.[0];
-          if (handleOrUrl && handleOrUrl.startsWith('http') && !handleOrUrl.includes('whatsapp.net')) {
-            components.push({
-              type: "header",
-              parameters: [{ type: "image", image: { link: handleOrUrl } }]
-            });
+      // Dados do envio (mídia + variáveis): padrão salvo no CRM, com os campos
+      // do contato ({{nome}}, {{pedido}}...) resolvidos para este contato.
+      let components: any[] = [];
+      if (template) {
+        const schema = parseTemplateSchema(template.components);
+        if (templateHasDynamicInputs(schema)) {
+          const config = await resolveTemplateSendConfig(template);
+          const issues = validateTemplateSendConfig(schema, config || createDefaultSendConfig(schema), selectedContact, template.status);
+          if (issues.length > 0) {
+            throw new Error(`${issues[0].message} Abra "Variáveis" no template para configurar.`);
           }
-        } else if (headerComponent.format === 'TEXT' && headerComponent.text) {
-          const headerVariables = headerComponent.text.match(/\{\{\d+\}\}/g);
-          if (headerVariables) {
-            components.push({
-              type: "header",
-              parameters: headerVariables.map(() => ({ type: "text", text: "---" }))
-            });
-          }
-        }
-      }
-
-      if (bodyComponent?.text) {
-        const bodyVariables = bodyComponent.text.match(/\{\{\d+\}\}/g);
-        if (bodyVariables) {
-          const parameters = bodyVariables.map((_: any, index: number) => {
-            if (index === 0 && selectedContact.name) return { type: "text", text: selectedContact.name };
-            const exampleData = bodyComponent.example?.body_text?.[0] || [];
-            let val = "---";
-            if (Array.isArray(exampleData)) {
-              if (exampleData.length === 1 && typeof exampleData[0] === 'string' && bodyVariables.length > 1) {
-                const splitExamples = exampleData[0].split(' ');
-                val = splitExamples[index] || "---";
-              } else {
-                val = exampleData[index] || "---";
-              }
-            } else if (typeof exampleData === 'string') {
-              const splitExamples = exampleData.split(' ');
-              val = splitExamples[index] || "---";
-            }
-            return { type: "text", text: val };
-          });
-          components.push({ type: "body", parameters: parameters });
+          components = buildTemplateComponents(schema, config || createDefaultSendConfig(schema), selectedContact);
         }
       }
 
@@ -8563,6 +8601,18 @@ const CRM = () => {
                                          template.status === 'PENDING' ? 'Pendente' : template.status}
                                       </Badge>
                                       <div className="flex gap-1">
+                                        {template.status === 'APPROVED' && templateHasDynamicInputs(parseTemplateSchema(template.components)) && (
+                                          <Button
+                                            variant="ghost"
+                                            size="icon"
+                                            className="h-7 w-7 text-primary hover:bg-primary/10"
+                                            title="Variáveis padrão deste template (imagem, valores e links)"
+                                            aria-label={`Configurar variáveis do template ${template.name}`}
+                                            onClick={() => setTemplateVariablesTarget({ template, purpose: 'default' })}
+                                          >
+                                            <Braces className="h-3.5 w-3.5" />
+                                          </Button>
+                                        )}
                                         <Button variant="ghost" size="icon" className="h-7 w-7 text-primary hover:bg-primary/10" onClick={() => setPreviewTemplate(template)}>
                                           <Eye className="h-3.5 w-3.5" />
                                         </Button>
@@ -8685,6 +8735,15 @@ const CRM = () => {
                     </AccordionItem>
                   </Accordion>
                 </div>
+
+                <TemplateVariablesDialog
+                  open={!!templateVariablesTarget && templateVariablesTarget.purpose === 'default'}
+                  onOpenChange={(open) => !open && setTemplateVariablesTarget(null)}
+                  template={templateVariablesTarget?.purpose === 'default' ? templateVariablesTarget.template : null}
+                  contacts={contacts}
+                  onApply={() => setTemplateVariablesTarget(null)}
+                  applyLabel="Concluir"
+                />
 
                 <Dialog open={!!previewTemplate} onOpenChange={(open) => !open && setPreviewTemplate(null)}>
                   <DialogContent className="max-w-md p-0 overflow-hidden bg-transparent border-none shadow-none">
@@ -10560,7 +10619,17 @@ const CRM = () => {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={isSchedulingOpen} onOpenChange={setIsSchedulingOpen}>
+      <TemplateVariablesDialog
+        open={!!templateVariablesTarget && templateVariablesTarget.purpose === 'schedule'}
+        onOpenChange={(open) => !open && setTemplateVariablesTarget(null)}
+        template={templateVariablesTarget?.purpose === 'schedule' ? templateVariablesTarget.template : null}
+        initialConfig={scheduleTemplateConfig}
+        contacts={contacts}
+        onApply={(config) => { setScheduleTemplateConfig(config); setTemplateVariablesTarget(null); }}
+        applyLabel="Usar neste agendamento"
+      />
+
+      <Dialog open={isSchedulingOpen} onOpenChange={(open) => { setIsSchedulingOpen(open); if (!open) setScheduleTemplateConfig(null); }}>
         <DialogContent className="w-[calc(100vw-1rem)] sm:w-full max-w-2xl rounded-2xl sm:rounded-3xl p-4 sm:p-6 border-none shadow-2xl overflow-hidden flex flex-col max-h-[95vh] sm:max-h-[90vh] bg-white text-zinc-900">
           <DialogHeader>
             <DialogTitle className="text-xl font-bold flex items-center gap-2 text-primary">
@@ -10789,16 +10858,56 @@ const CRM = () => {
                       <Label className="text-xs font-bold text-zinc-700">Selecione o Template Aprovado</Label>
                       {templates.filter(t => t.status === 'APPROVED').length > 0 ? (
                         <>
-                          <Select value={selectedScheduleId} onValueChange={setSelectedScheduleId}>
-                            <SelectTrigger className="h-11 rounded-xl bg-zinc-100 border-none text-zinc-900">
-                              <SelectValue placeholder="Escolha um modelo..." />
-                            </SelectTrigger>
-                            <SelectContent className="rounded-xl">
-                              {templates.filter(t => t.status === 'APPROVED').map(t => (
-                                <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
+                          <div className="flex gap-2">
+                            <Select value={selectedScheduleId} onValueChange={(value) => { setSelectedScheduleId(value); setScheduleTemplateConfig(null); }}>
+                              <SelectTrigger className="h-11 rounded-xl bg-zinc-100 border-none text-zinc-900 flex-1">
+                                <SelectValue placeholder="Escolha um modelo..." />
+                              </SelectTrigger>
+                              <SelectContent className="rounded-xl">
+                                {templates.filter(t => t.status === 'APPROVED').map(t => {
+                                  const schema = parseTemplateSchema(t.components);
+                                  const dynamic = templateHasDynamicInputs(schema) ? countDynamicInputs(schema) : 0;
+                                  return (
+                                    <SelectItem key={t.id} value={t.id}>
+                                      {t.name}{dynamic > 0 ? ` · ${dynamic} variável(is)` : ''}
+                                    </SelectItem>
+                                  );
+                                })}
+                              </SelectContent>
+                            </Select>
+                            {(() => {
+                              const t = templates.find(temp => temp.id === selectedScheduleId);
+                              if (!t || !templateHasDynamicInputs(parseTemplateSchema(t.components))) return null;
+                              const issue = templateSendIssue(t, scheduleTemplateConfig);
+                              return (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  className={cn(
+                                    "h-11 rounded-xl px-3 shrink-0 border-zinc-200",
+                                    issue && !scheduleTemplateConfig ? "text-amber-700 border-amber-300 bg-amber-50" : "text-primary"
+                                  )}
+                                  title="Editar variáveis, imagem e links deste template"
+                                  aria-label="Editar variáveis do template"
+                                  onClick={() => setTemplateVariablesTarget({ template: t, purpose: 'schedule' })}
+                                >
+                                  <Braces className="w-4 h-4" />
+                                  <span className="ml-1.5 text-xs font-bold hidden sm:inline">Variáveis</span>
+                                </Button>
+                              );
+                            })()}
+                          </div>
+                          {(() => {
+                            const t = templates.find(temp => temp.id === selectedScheduleId);
+                            if (!t || !templateHasDynamicInputs(parseTemplateSchema(t.components))) return null;
+                            return (
+                              <p className="text-[10px] text-zinc-500">
+                                {scheduleTemplateConfig
+                                  ? 'Variáveis definidas para este agendamento.'
+                                  : 'Será usada a configuração padrão salva do template. Clique em Variáveis para ajustar imagem e valores.'}
+                              </p>
+                            );
+                          })()}
                           <p className="text-[10px] text-emerald-600 font-medium italic flex items-center gap-1">
                             <CheckCircle2 className="w-3 h-3" /> Templates podem ser agendados para qualquer contato (Mesmo janelas expiradas).
                           </p>

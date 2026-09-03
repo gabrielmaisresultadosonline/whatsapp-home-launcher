@@ -32,11 +32,13 @@ import {
   Info,
   Check,
   RefreshCw,
-  Link2
+  Link2,
+  Braces
 } from "lucide-react";
 import { createShortLink, isShortLink } from "@/lib/shortLink";
 import TemplatePreview from './TemplatePreview';
 import MetaPricingCalculator from './MetaPricingCalculator';
+import TemplateVariablesGuide from './TemplateVariablesGuide';
 import { Badge } from "@/components/ui/badge";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
@@ -100,6 +102,10 @@ const TemplateBuilder: React.FC<TemplateBuilderProps> = ({ onSave, isSaving }) =
   const [headerText, setHeaderText] = useState('');
   const [headerUrl, setHeaderUrl] = useState('');
   const [bodyText, setBodyText] = useState('');
+  // Exemplos reais de cada variável — a Meta usa para entender o contexto na aprovação.
+  const [bodyExamples, setBodyExamples] = useState<Record<string, string>>({});
+  const [headerExample, setHeaderExample] = useState('');
+  const bodyTextareaRef = useRef<HTMLTextAreaElement>(null);
   const [footerText, setFooterText] = useState('');
   const [buttons, setButtons] = useState<any[]>([]);
   const [shorteningKey, setShorteningKey] = useState<string | null>(null);
@@ -269,6 +275,24 @@ const TemplateBuilder: React.FC<TemplateBuilderProps> = ({ onSave, isSaving }) =
     toast({ title: "Mensagem convertida", description: "O corpo da mensagem foi substituído pela versão Utility." });
   };
 
+  /** Insere a próxima variável sequencial ({{n}}) na posição do cursor do corpo. */
+  const insertNextBodyVariable = () => {
+    const nextIndex = getTemplateVariableIndexes(bodyText).length + 1;
+    const token = `{{${nextIndex}}}`;
+    const textarea = bodyTextareaRef.current;
+    const start = textarea?.selectionStart ?? bodyText.length;
+    const end = textarea?.selectionEnd ?? bodyText.length;
+    const next = `${bodyText.slice(0, start)}${token}${bodyText.slice(end)}`;
+    setBodyText(next);
+    requestAnimationFrame(() => {
+      if (!textarea) return;
+      textarea.focus();
+      textarea.setSelectionRange(start + token.length, start + token.length);
+    });
+  };
+
+  const bodyVariableIndexes = getTemplateVariableIndexes(bodyText);
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, cardIndex?: number) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -424,7 +448,7 @@ const TemplateBuilder: React.FC<TemplateBuilderProps> = ({ onSave, isSaving }) =
         if (headerType === 'TEXT') {
           header.text = headerText;
           const variables = headerText.match(/\{\{\d+\}\}/g);
-          if (variables) header.example = { header_text: [headerText.replace(/\{\{\d+\}\}/g, "Exemplo")] };
+          if (variables) header.example = { header_text: [headerExample.trim() || "Exemplo"] };
         } else {
           header.example = { header_handle: [headerUrl.trim()] };
         }
@@ -433,8 +457,10 @@ const TemplateBuilder: React.FC<TemplateBuilderProps> = ({ onSave, isSaving }) =
       
       // Body
       const body: any = { type: 'BODY', text: bodyText };
-      const bodyVariables = bodyText.match(/\{\{\d+\}\}/g);
-      if (bodyVariables) body.example = { body_text: [bodyVariables.map(() => "Exemplo")] };
+      const bodyVariables = getTemplateVariableIndexes(bodyText);
+      if (bodyVariables.length > 0) {
+        body.example = { body_text: [bodyVariables.map(index => (bodyExamples[String(index)] || '').trim() || "Exemplo")] };
+      }
       components.push(body);
       
       // Footer
@@ -558,7 +584,14 @@ const TemplateBuilder: React.FC<TemplateBuilderProps> = ({ onSave, isSaving }) =
                     <Button variant={headerType === 'DOCUMENT' ? 'default' : 'outline'} size="sm" onClick={() => setHeaderType('DOCUMENT')}><FileText className="w-4 h-4 mr-1" /> Documento</Button>
                   </div>
                   
-                  {headerType === 'TEXT' && <Input placeholder="Texto do cabeçalho" value={headerText} onChange={e => setHeaderText(e.target.value)} maxLength={60} />}
+                  {headerType === 'TEXT' && (
+                    <div className="space-y-2">
+                      <Input placeholder="Texto do cabeçalho (aceita somente {{1}})" value={headerText} onChange={e => setHeaderText(e.target.value)} maxLength={60} />
+                      {/\{\{1\}\}/.test(headerText) && (
+                        <Input placeholder="Exemplo real para {{1}} do cabeçalho (ex.: Pedido 45821)" value={headerExample} onChange={e => setHeaderExample(e.target.value)} maxLength={60} className="text-xs" />
+                      )}
+                    </div>
+                  )}
                   {(headerType === 'IMAGE' || headerType === 'VIDEO' || headerType === 'DOCUMENT') && (
                     <div className="flex gap-2">
                       <Input placeholder="URL da mídia" value={headerUrl} onChange={e => setHeaderUrl(e.target.value)} className="flex-1" />
@@ -568,13 +601,25 @@ const TemplateBuilder: React.FC<TemplateBuilderProps> = ({ onSave, isSaving }) =
                       </Button>
                     </div>
                   )}
+                  {(headerType === 'IMAGE' || headerType === 'VIDEO' || headerType === 'DOCUMENT') && (
+                    <p className="text-[10px] text-muted-foreground flex items-start gap-1">
+                      <Info className="w-3 h-3 shrink-0 mt-0.5" />
+                      Esta mídia é só o exemplo para aprovação. No envio você pode trocar por outra imagem/vídeo em cada campanha, mantendo o mesmo template aprovado.
+                    </p>
+                  )}
                 </div>
 
                 <div className="space-y-2">
-                  <Label>Corpo da Mensagem</Label>
+                  <div className="flex items-center justify-between gap-2">
+                    <Label>Corpo da Mensagem</Label>
+                    <Button type="button" variant="outline" size="sm" className="h-7 text-[11px]" onClick={insertNextBodyVariable} aria-label="Inserir variável no corpo">
+                      <Braces className="w-3 h-3 mr-1" /> Inserir variável {`{{${bodyVariableIndexes.length + 1}}}`}
+                    </Button>
+                  </div>
                   <div className="relative">
                     <Textarea
-                      placeholder="Sua mensagem aqui..."
+                      ref={bodyTextareaRef}
+                      placeholder="Ex.: Olá {{1}}, sua solicitação {{2}} foi atualizada."
                       value={bodyText}
                       onChange={e => setBodyText(e.target.value)}
                       rows={5}
@@ -593,6 +638,33 @@ const TemplateBuilder: React.FC<TemplateBuilderProps> = ({ onSave, isSaving }) =
                       Converter para Utility
                     </Button>
                   </div>
+                  {bodyVariableIndexes.length > 0 && (
+                    <div className="rounded-xl border bg-muted/30 p-3 space-y-2 animate-in fade-in">
+                      <p className="text-[11px] font-semibold flex items-center gap-1.5">
+                        <Braces className="w-3.5 h-3.5 text-primary" /> Exemplos das variáveis (obrigatório para aprovação)
+                      </p>
+                      <p className="text-[10px] text-muted-foreground">
+                        Informe um valor real de cada variável. No envio, você troca por texto ou campos do contato ({'{{nome}}'}, {'{{pedido}}'}...).
+                      </p>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {bodyVariableIndexes.map(index => (
+                          <div key={index} className="space-y-1">
+                            <Label className="text-[10px] font-mono text-primary">{`{{${index}}}`}</Label>
+                            <Input
+                              value={bodyExamples[String(index)] || ''}
+                              onChange={e => setBodyExamples(prev => ({ ...prev, [String(index)]: e.target.value }))}
+                              placeholder={index === 1 ? 'Ex.: João' : index === 2 ? 'Ex.: 45821' : 'Ex.: valor real'}
+                              className="h-8 text-xs"
+                              maxLength={120}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                      {!hasSequentialTemplateVariables(bodyText) && (
+                        <p className="text-[10px] text-destructive">As variáveis precisam ser sequenciais: {'{{1}}'}, {'{{2}}'}, {'{{3}}'}...</p>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 <div className="space-y-2">
@@ -631,6 +703,9 @@ const TemplateBuilder: React.FC<TemplateBuilderProps> = ({ onSave, isSaving }) =
                             </div>
                             <p className="text-[10px] text-muted-foreground">
                               Opcional: gera um link do seu domínio (ex.: /l/ab12cd) — permite usar destinos que a Meta bloqueia, como wa.me.
+                            </p>
+                            <p className="text-[10px] text-muted-foreground">
+                              Link dinâmico: termine a URL com <code className="text-primary">{'{{1}}'}</code> (ex.: https://seusite.com/pedido/{'{{1}}'}) e preencha o valor no envio.
                             </p>
                           </div>
                         )}
@@ -797,6 +872,7 @@ const TemplateBuilder: React.FC<TemplateBuilderProps> = ({ onSave, isSaving }) =
           defaultQuantity={100}
           collapsible
         />
+        <TemplateVariablesGuide />
       </div>
     </div>
 

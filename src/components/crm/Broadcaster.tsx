@@ -54,7 +54,8 @@ import {
   BrainCircuit,
   X,
   Search,
-  Bookmark
+  Bookmark,
+  Braces
 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
@@ -62,6 +63,17 @@ import { Switch } from "@/components/ui/switch";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import MetaPricingCalculator from "@/components/whatsapp/MetaPricingCalculator";
 import BroadcastFailureLogs from "@/components/crm/BroadcastFailureLogs";
+import TemplateVariablesDialog, { loadDefaultTemplatePreset } from "@/components/whatsapp/TemplateVariablesDialog";
+import {
+  TemplateSendConfig,
+  buildTemplateComponents,
+  countDynamicInputs,
+  createDefaultSendConfig,
+  normalizeSendConfig,
+  parseTemplateSchema,
+  templateHasDynamicInputs,
+  validateTemplateSendConfig,
+} from "@/lib/templateVariables";
 
 
 
@@ -149,6 +161,9 @@ const Broadcaster = ({ templates, flows, contacts, statuses }: BroadcasterProps)
   const [selectedTags24h, setSelectedTags24h] = useState<string[]>([]);
   const [messageText, setMessageText] = useState('');
   const [selectedTemplate, setSelectedTemplate] = useState('');
+  // Dados do envio do template (mídia + variáveis) — separados da estrutura aprovada.
+  const [templateConfig, setTemplateConfig] = useState<TemplateSendConfig | null>(null);
+  const [templateVariablesOpen, setTemplateVariablesOpen] = useState(false);
   const [selectedFlow, setSelectedFlow] = useState('');
   const [uploadedNumbers, setUploadedNumbers] = useState('');
   const [delayMin, setDelayMin] = useState(10);
@@ -427,6 +442,33 @@ const Broadcaster = ({ templates, flows, contacts, statuses }: BroadcasterProps)
     }
   };
 
+  const selectedTemplateRow = useMemo(() => templates.find(t => t.id === selectedTemplate) || null, [templates, selectedTemplate]);
+  const selectedTemplateSchema = useMemo(() => parseTemplateSchema(selectedTemplateRow?.components), [selectedTemplateRow]);
+  const selectedTemplateIsDynamic = !!selectedTemplateRow && templateHasDynamicInputs(selectedTemplateSchema);
+  const templateConfigIssues = useMemo(
+    () => (selectedTemplateIsDynamic && templateConfig ? validateTemplateSendConfig(selectedTemplateSchema, templateConfig, null, null) : []),
+    [selectedTemplateIsDynamic, selectedTemplateSchema, templateConfig],
+  );
+
+  // Ao trocar de template, carrega a configuração padrão salva no CRM (se houver).
+  useEffect(() => {
+    let cancelled = false;
+    if (!selectedTemplateRow) { setTemplateConfig(null); return; }
+    const schema = parseTemplateSchema(selectedTemplateRow.components);
+    if (!templateHasDynamicInputs(schema)) { setTemplateConfig(null); return; }
+    setTemplateConfig(createDefaultSendConfig(schema));
+    loadDefaultTemplatePreset(selectedTemplateRow.id).then(preset => {
+      if (!cancelled && preset) setTemplateConfig(normalizeSendConfig(preset, schema));
+    });
+    return () => { cancelled = true; };
+  }, [selectedTemplateRow]);
+
+  /** Localiza o contato do CRM pelo número para resolver {{nome}}, {{pedido}} etc. */
+  const findContactForNumber = (number: string) => {
+    const variants = new Set(waIdVariants(number));
+    return contacts.find(c => variants.has(String(c?.wa_id || '').replace(/\D/g, ''))) || { wa_id: canonicalWaId(number), name: '', metadata: {} };
+  };
+
   /** Filtra pelo número de WhatsApp aberto: cada caixa tem sua própria base. */
   const scopeNumber = <T,>(query: T): T => {
     const numberId = getActiveWhatsAppNumberId();
@@ -537,6 +579,20 @@ const Broadcaster = ({ templates, flows, contacts, statuses }: BroadcasterProps)
             });
             setLoading(false);
             return;
+          }
+          // Variáveis/imagem obrigatórias precisam estar preenchidas antes de queimar a lista.
+          if (selectedTemplateIsDynamic) {
+            const issues = validateTemplateSendConfig(selectedTemplateSchema, templateConfig || createDefaultSendConfig(selectedTemplateSchema), null, null);
+            if (issues.length > 0) {
+              toast({
+                title: "Complete as variáveis do template",
+                description: issues[0].message,
+                variant: "destructive",
+              });
+              setTemplateVariablesOpen(true);
+              setLoading(false);
+              return;
+            }
           }
           // Templates aprovados podem ser enviados para qualquer um (Lista Fria ou Janela Ativa)
           numbers = potentialNumbers;
@@ -651,6 +707,13 @@ const Broadcaster = ({ templates, flows, contacts, statuses }: BroadcasterProps)
           payload.action = 'sendTemplate';
           payload.templateName = t?.name;
           payload.languageCode = t?.language || 'pt_BR';
+          // Mesmo template aprovado, parâmetros próprios de cada contato.
+          if (t && templateConfig) {
+            const schema = parseTemplateSchema(t.components);
+            if (templateHasDynamicInputs(schema)) {
+              payload.components = buildTemplateComponents(schema, templateConfig, findContactForNumber(number));
+            }
+          }
         } else if (type === 'flow') {
           // Find contact or create one (flows require a contactId)
           const canonicalNumber = canonicalWaId(number);
@@ -1591,6 +1654,26 @@ const Broadcaster = ({ templates, flows, contacts, statuses }: BroadcasterProps)
                           >
                             <div className="flex justify-between items-center mb-2 gap-2">
                               <span className="font-bold text-[10px] md:text-xs truncate text-[#e9edef] flex-1">{t.name}</span>
+                              {(() => {
+                                const schema = parseTemplateSchema(t.components);
+                                const dynamicCount = templateHasDynamicInputs(schema) ? countDynamicInputs(schema) : 0;
+                                return dynamicCount > 0 ? (
+                                  <button
+                                    type="button"
+                                    aria-label={`Editar variáveis do template ${t.name}`}
+                                    title="Editar variáveis, imagem e links deste template"
+                                    onClick={(e) => { e.stopPropagation(); setSelectedTemplate(t.id); setTemplateVariablesOpen(true); }}
+                                    className={cn(
+                                      "shrink-0 inline-flex items-center gap-1 rounded-md px-1.5 h-6 text-[9px] font-bold transition-colors",
+                                      selectedTemplate === t.id && templateConfigIssues.length > 0
+                                        ? "bg-amber-500/20 text-amber-300 hover:bg-amber-500/30"
+                                        : "bg-[#00a884]/15 text-[#00a884] hover:bg-[#00a884]/30"
+                                    )}
+                                  >
+                                    <Braces className="w-3 h-3" /> {dynamicCount}
+                                  </button>
+                                ) : null;
+                              })()}
                               <Badge variant="secondary" className="text-[8px] md:text-[9px] bg-[#111b21] shrink-0">{t.category}</Badge>
                             </div>
                             <p className="text-[9px] md:text-[10px] text-[#8696a0] line-clamp-2 break-words">
@@ -1599,6 +1682,33 @@ const Broadcaster = ({ templates, flows, contacts, statuses }: BroadcasterProps)
                           </div>
                         ))}
                       </div>
+
+                      {selectedTemplateRow && selectedTemplateIsDynamic && (
+                        <div className={cn(
+                          "rounded-xl border p-3 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3",
+                          templateConfigIssues.length > 0 ? "border-amber-500/30 bg-amber-500/5" : "border-[#00a884]/30 bg-[#00a884]/5"
+                        )}>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-[11px] font-bold text-[#e9edef] flex items-center gap-1.5">
+                              <Braces className="w-3.5 h-3.5" /> Este template tem {countDynamicInputs(selectedTemplateSchema)} campo(s) dinâmico(s)
+                            </p>
+                            <p className="text-[10px] text-[#8696a0] leading-snug">
+                              {templateConfigIssues.length > 0
+                                ? templateConfigIssues[0].message
+                                : "Variáveis preenchidas. Cada contato recebe os próprios valores ({{nome}}, {{pedido}}...)."}
+                            </p>
+                          </div>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant={templateConfigIssues.length > 0 ? "default" : "outline"}
+                            className="rounded-lg h-8 text-[11px] shrink-0"
+                            onClick={() => setTemplateVariablesOpen(true)}
+                          >
+                            <Braces className="w-3.5 h-3.5 mr-1" /> {templateConfigIssues.length > 0 ? "Preencher variáveis" : "Editar variáveis"}
+                          </Button>
+                        </div>
+                      )}
                     </TabsContent>
 
                     <TabsContent value="flow" className="space-y-4 animate-in fade-in">
@@ -1836,6 +1946,16 @@ const Broadcaster = ({ templates, flows, contacts, statuses }: BroadcasterProps)
         broadcast={logsBroadcast}
         open={!!logsBroadcast}
         onOpenChange={(o) => { if (!o) setLogsBroadcast(null); }}
+      />
+
+      <TemplateVariablesDialog
+        open={templateVariablesOpen}
+        onOpenChange={setTemplateVariablesOpen}
+        template={selectedTemplateRow}
+        initialConfig={templateConfig}
+        contacts={contacts}
+        onApply={setTemplateConfig}
+        applyLabel="Usar nesta campanha"
       />
     </div>
   );

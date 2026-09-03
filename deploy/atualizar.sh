@@ -277,6 +277,9 @@ else
     if [ "$nome" = "095-ai-agent-kanban-and-whatsapp-primary.sql" ]; then
       graves="${erros:-0}"
     fi
+    if [ "$nome" = "096-template-variable-presets.sql" ]; then
+      graves="${erros:-0}"
+    fi
     if [ "${erros:-0}" -gt 0 ]; then
       warn "  ${erros} aviso(s)/erro(s) em $nome → /tmp/zapmro-sql-$nome.log"
       grep -iE '^psql:.*(ERROR|FATAL)' "/tmp/zapmro-sql-$nome.log" | sort -u | head -3 | sed 's/^/      /' || true
@@ -460,6 +463,13 @@ if [ "$google_primary_column" = "1" ] && [ "$ai_preferences_columns" = "2" ]; th
   echo -e "  Migration 095         : ${C_G}OK${N} (WhatsApp principal + preferências IA)"
 else
   die "Migration 095 incompleta. Veja /tmp/zapmro-sql-095-ai-agent-kanban-and-whatsapp-primary.sql.log"
+fi
+template_presets_table="$(q "select count(*) from information_schema.tables where table_schema='public' and table_name='crm_template_variable_presets'")"
+template_presets_rls="$(q "select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relname='crm_template_variable_presets' and c.relrowsecurity")"
+if [ "$template_presets_table" = "1" ] && [ "$template_presets_rls" = "1" ]; then
+  echo -e "  Migration 096         : ${C_G}OK${N} (variáveis de templates salvas + RLS)"
+else
+  die "Migration 096 incompleta. Veja /tmp/zapmro-sql-096-template-variable-presets.sql.log"
 fi
 if grep -q "Sem depender da UNIQUE(user_id,email)" "$ROOT/supabase/functions/meta-whatsapp-crm/index.ts"; then
   echo -e "  Google OAuth function : ${C_G}OK${N} (update/insert sem ON CONFLICT)"
