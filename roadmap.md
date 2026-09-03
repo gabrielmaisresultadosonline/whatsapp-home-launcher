@@ -15,3 +15,4 @@
 - [x] Google Contatos: corrigir o botão genérico para importar e separar pendentes globais/por cadastro no diagnóstico.
 
 - [x] Agente IA: organizador Kanban automático, opção de resposta agrupada e correções completas da sincronização Google.
+- [x] Templates Meta: variáveis/imagem/botões editáveis no envio (disparador, agendamento, conversa), presets salvos (migration 096), validação estrutural na Edge Function, registro de cliques em resposta rápida e tutorial Utility no criador.

@@ -10629,7 +10629,7 @@ const CRM = () => {
         applyLabel="Usar neste agendamento"
       />
 
-      <Dialog open={isSchedulingOpen} onOpenChange={setIsSchedulingOpen}>
+      <Dialog open={isSchedulingOpen} onOpenChange={(open) => { setIsSchedulingOpen(open); if (!open) setScheduleTemplateConfig(null); }}>
         <DialogContent className="w-[calc(100vw-1rem)] sm:w-full max-w-2xl rounded-2xl sm:rounded-3xl p-4 sm:p-6 border-none shadow-2xl overflow-hidden flex flex-col max-h-[95vh] sm:max-h-[90vh] bg-white text-zinc-900">
           <DialogHeader>
             <DialogTitle className="text-xl font-bold flex items-center gap-2 text-primary">
