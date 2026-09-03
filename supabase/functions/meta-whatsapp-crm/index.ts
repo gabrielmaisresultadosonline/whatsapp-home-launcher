@@ -6307,7 +6307,7 @@ async function fetchAndStoreIncomingMedia(
 
        const { data: existingAccount } = await supabase
          .from('crm_google_accounts')
-         .select('refresh_token, auto_sync')
+         .select('id, refresh_token, auto_sync')
          .eq('user_id', userId)
          .eq('email', email)
          .maybeSingle();
@@ -6321,9 +6321,7 @@ async function fetchAndStoreIncomingMedia(
 
        // Store in crm_google_accounts. Google may omit refresh_token on repeated consent,
        // so preserve the previous one instead of overwriting it with null/undefined.
-       const { data: account, error: accError } = await supabase
-         .from('crm_google_accounts')
-         .upsert({
+       const accountPayload = {
            email,
            access_token: tokens.access_token,
            refresh_token: tokens.refresh_token || existingAccount?.refresh_token || null,
@@ -6338,11 +6336,30 @@ async function fetchAndStoreIncomingMedia(
              ? null
              : 'A permissão de Contatos do Google não foi concedida. Reconecte e marque a caixa de acesso aos Contatos.',
            last_sync_error_at: scopeOk ? null : new Date().toISOString(),
-         }, { onConflict: 'user_id, email' })
-         .select()
-         .single();
+         };
 
-      if (accError) throw accError;
+       // Sem depender da UNIQUE(user_id,email) (migration 094): se a conta já
+       // existe, atualiza pelo id; senão insere. Evita o erro
+       // "no unique or exclusion constraint matching the ON CONFLICT specification".
+       let account: Record<string, unknown> | null = null;
+       if (existingAccount?.id) {
+         const { data, error } = await supabase
+           .from('crm_google_accounts')
+           .update(accountPayload)
+           .eq('id', existingAccount.id)
+           .select()
+           .single();
+         if (error) throw error;
+         account = data;
+       } else {
+         const { data, error } = await supabase
+           .from('crm_google_accounts')
+           .insert(accountPayload)
+           .select()
+           .single();
+         if (error) throw error;
+         account = data;
+       }
 
       if (!scopeOk) {
         console.error(`[OAUTH] Conta ${email} conectada SEM escopo de Contatos. Escopos: ${grantedScopes?.join(' ')}`);
