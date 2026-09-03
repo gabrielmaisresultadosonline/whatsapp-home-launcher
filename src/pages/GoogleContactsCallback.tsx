@@ -37,7 +37,12 @@ const GoogleContactsCallback = () => {
             });
             console.log("Resultado da sincronização automática:", { syncData, syncError });
             if (syncError || !syncData?.success) {
-              throw new Error(syncError?.message || syncData?.error || 'A conta conectou, mas os contatos não puderam ser importados.');
+              const syncMessage = syncError?.message || syncData?.error || 'A conta conectou, mas os contatos não puderam ser importados.';
+              console.error('Falha na importação automática do Google Contatos:', syncMessage);
+              setStatus("error");
+              toast.error(syncMessage);
+              setTimeout(() => navigate("/crm"), 5000);
+              return;
             }
           }
 
