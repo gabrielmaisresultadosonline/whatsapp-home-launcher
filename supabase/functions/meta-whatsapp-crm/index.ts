@@ -3508,11 +3508,34 @@ async function syncOutboundStatusFromMeta(supabase: any, userId: string, statusE
   return { updated: true, status: nextStatus };
 }
 
+// MIME por extensão para documentos — a Meta rejeita 'application/octet-stream'.
+const DOC_MIME_BY_EXT: Record<string, string> = {
+  pdf: 'application/pdf', txt: 'text/plain', csv: 'text/csv', rtf: 'application/rtf',
+  doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xls: 'application/vnd.ms-excel', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  ppt: 'application/vnd.ms-powerpoint', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  zip: 'application/zip', rar: 'application/vnd.rar', '7z': 'application/x-7z-compressed',
+  json: 'application/json', xml: 'application/xml',
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif',
+  mp4: 'video/mp4', mp3: 'audio/mpeg', ogg: 'audio/ogg', wav: 'audio/wav', m4a: 'audio/mp4',
+};
+
+const guessDocumentMime = (fileName: string | undefined, declared?: string | null, urlHint?: string): string => {
+  const normalized = (declared || '').split(';')[0].trim().toLowerCase();
+  if (normalized && normalized !== 'application/octet-stream') return normalized;
+  const source = fileName || urlHint || '';
+  const ext = (source.split('?')[0].split('.').pop() || '').toLowerCase();
+  return DOC_MIME_BY_EXT[ext] || 'application/pdf';
+};
+
 const guessMedia = (params: any) => {
   if (params.audioUrl) return { type: 'audio', url: params.audioUrl, mime: 'audio/ogg; codecs=opus', fileName: 'audio.ogg' }
   if (params.imageUrl) return { type: 'image', url: params.imageUrl, mime: 'image/jpeg', fileName: 'image.jpg' }
   if (params.videoUrl) return { type: 'video', url: params.videoUrl, mime: 'video/mp4', fileName: 'video.mp4' }
-  if (params.documentUrl) return { type: 'document', url: params.documentUrl, mime: 'application/octet-stream', fileName: params.fileName || 'document' }
+  if (params.documentUrl) {
+    const fileName = String(params.fileName || '').trim() || 'documento';
+    return { type: 'document', url: params.documentUrl, mime: guessDocumentMime(fileName, params.mimeType, params.documentUrl), fileName }
+  }
   return null
 }
 
