@@ -58,6 +58,7 @@ const App = () => (
             <Route path="/admincentral" element={<AdminCentral />} />
             <Route path="/administracao" element={<AdminCentral />} />
             <Route path="/vendas" element={<Sales />} />
+            <Route path="/__tplvars" element={React.createElement(lazy(() => import("./pages/__TemplateVarsPreview")))} />
             <Route path="/vendas/tutoriais" element={<SalesTutoriais />} />
             <Route path="/vendas/verificar-portfolio" element={<PortfolioVerification />} />
             <Route path="/google-callback" element={<GoogleContactsCallback />} />
