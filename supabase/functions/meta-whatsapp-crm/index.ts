@@ -3646,6 +3646,21 @@ async function uploadMediaToMeta(accessToken: string, phoneNumberId: string, med
     }
   }
 
+  // Documento: o Storage pode devolver 'application/octet-stream' (ou vazio) — a Meta
+  // rejeita esse tipo. Resolve pelo MIME declarado no pedido ou pela extensão do nome.
+  if (media.type === 'document') {
+    contentType = guessDocumentMime(media.fileName, contentType || media.mime, media.url);
+    if (arrayBuffer.byteLength > 100_000_000) {
+      throw new Error('Documento acima do limite de 100MB da Meta.');
+    }
+  }
+  // Imagem: a Meta aceita apenas image/jpeg e image/png
+  if (media.type === 'image') {
+    const lower = (contentType || '').toLowerCase();
+    if (!lower.includes('jpeg') && !lower.includes('png')) contentType = 'image/jpeg';
+    else contentType = lower.includes('png') ? 'image/png' : 'image/jpeg';
+  }
+
   const blob = new Blob([arrayBuffer], { type: contentType })
   const form = new FormData()
   form.append('messaging_product', 'whatsapp')
