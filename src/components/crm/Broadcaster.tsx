@@ -1947,6 +1947,16 @@ const Broadcaster = ({ templates, flows, contacts, statuses }: BroadcasterProps)
         open={!!logsBroadcast}
         onOpenChange={(o) => { if (!o) setLogsBroadcast(null); }}
       />
+
+      <TemplateVariablesDialog
+        open={templateVariablesOpen}
+        onOpenChange={setTemplateVariablesOpen}
+        template={selectedTemplateRow}
+        initialConfig={templateConfig}
+        contacts={contacts}
+        onApply={setTemplateConfig}
+        applyLabel="Usar nesta campanha"
+      />
     </div>
   );
 };
