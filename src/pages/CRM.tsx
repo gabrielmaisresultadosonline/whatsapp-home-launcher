@@ -3991,12 +3991,23 @@ const CRM = () => {
         fileExt = 'ogg';
         contentType = 'audio/ogg; codecs=opus';
       } else if (file instanceof File) {
-        fileExt = file.name.split('.').pop() || 'bin';
-        contentType = file.type;
+        // Extensão saneada (minúscula, só [a-z0-9]) — evita path inválido no Storage
+        fileExt = (getFileExtension(file.name) || 'bin').replace(/[^a-z0-9]/g, '') || 'bin';
+        // File.type costuma vir vazio p/ .rar, .csv, .doc no Windows → infere pela extensão
+        contentType = resolveMimeType(file);
+      } else {
+        contentType = resolveMimeType({ type: (file as Blob).type });
+      }
+
+      // Documentos: valida limites da Meta antes de subir (100MB doc, 5MB img, 16MB vídeo)
+      const metaLimits: Record<typeof type, number> = { document: 100 * 1024 * 1024, image: 5 * 1024 * 1024, video: 16 * 1024 * 1024, audio: 16 * 1024 * 1024 };
+      if ((file as Blob).size > metaLimits[type]) {
+        throw new Error(`Arquivo muito grande. O WhatsApp aceita no máximo ${Math.round(metaLimits[type] / 1024 / 1024)}MB para ${type === 'document' ? 'documentos' : type}.`);
       }
 
       const fileName = `${Math.random().toString(36).substring(2)}_${Date.now()}.${fileExt}`;
       const filePath = `chat-media/${fileName}`;
+      const originalFileName = file instanceof File && file.name ? file.name : `document.${fileExt}`;
 
       setMediaUploadProgress(prev => ({ ...prev, [targetContactId]: 30 }));
 
