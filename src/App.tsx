@@ -4,6 +4,7 @@ import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import DevEmojiCheck from "./pages/__DevEmojiCheck";
 import AccessGate from "./components/crm/AccessGate";
 import Sales from "./pages/Sales";
 
@@ -53,6 +54,7 @@ const App = () => (
         <Suspense fallback={<RouteFallback />}>
           <Routes>
             <Route path="/" element={<Navigate to="/vendas" replace />} />
+            <Route path="/__dev-emoji" element={<DevEmojiCheck />} />
             <Route path="/crm" element={<AccessGate><CRM /></AccessGate>} />
             <Route path="/crm/login" element={<CRMLogin />} />
             <Route path="/admincentral" element={<AdminCentral />} />
