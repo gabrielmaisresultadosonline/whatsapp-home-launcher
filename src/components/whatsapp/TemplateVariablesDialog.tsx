@@ -23,6 +23,8 @@ import {
   normalizeSendConfig,
   parseTemplateSchema,
   renderTemplatePreview,
+  resolveContactTokens,
+  sanitizeParameterText,
   validateTemplateSendConfig,
 } from '@/lib/templateVariables';
 
@@ -216,8 +218,8 @@ export const TemplateVariablesDialog: React.FC<TemplateVariablesDialogProps> = (
     [schema, config, sampleContact, issues],
   );
 
-  const resolvedPreview = (raw: string | undefined) =>
-    renderTemplatePreview(schema, { ...config, bodyValues: { '1': raw ?? '' } , headerValues: {}, buttonValues: {} }, sampleContact);
+  /** Valor final de um campo para o contato de amostra. */
+  const resolvedValue = (raw: string | undefined) => sanitizeParameterText(resolveContactTokens(raw ?? '', sampleContact));
 
   const updateBody = (variable: number, value: string) =>
     setConfig(prev => ({ ...prev, bodyValues: { ...prev.bodyValues, [String(variable)]: value } }));
@@ -389,7 +391,7 @@ export const TemplateVariablesDialog: React.FC<TemplateVariablesDialogProps> = (
                       label={`{{${v}}} do cabeçalho`}
                       value={config.headerValues[String(v)] || ''}
                       onChange={value => updateHeader(v, value)}
-                      previewValue={renderTemplatePreview(schema, config, sampleContact).headerText}
+                      previewValue={resolvedValue(config.headerValues[String(v)])}
                     />
                   ))}
                 </section>
@@ -413,7 +415,7 @@ export const TemplateVariablesDialog: React.FC<TemplateVariablesDialogProps> = (
                       hint={schema.bodyExamples[position] && schema.bodyExamples[position] !== 'Exemplo' ? `Exemplo aprovado: ${schema.bodyExamples[position]}` : undefined}
                       value={config.bodyValues[String(v)] || ''}
                       onChange={value => updateBody(v, value)}
-                      previewValue={resolvedPreview(config.bodyValues[String(v)]).bodyText === schema.bodyText ? '' : undefined}
+                      previewValue={resolvedValue(config.bodyValues[String(v)])}
                     />
                   ))}
                 </section>
