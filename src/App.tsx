@@ -16,7 +16,6 @@ import Sales from "./pages/Sales";
  * reduzindo drasticamente o JS inicial no celular.
  */
 const CRM = lazy(() => import("./pages/CRM"));
-const TplVarsPreview = lazy(() => import("./pages/__TemplateVarsPreview"));
 const CRMLogin = lazy(() => import("./pages/CRMLogin"));
 const AdminCentral = lazy(() => import("./pages/AdminCentral"));
 const GoogleContactsCallback = lazy(() => import("./pages/GoogleContactsCallback"));
@@ -59,7 +58,6 @@ const App = () => (
             <Route path="/admincentral" element={<AdminCentral />} />
             <Route path="/administracao" element={<AdminCentral />} />
             <Route path="/vendas" element={<Sales />} />
-            <Route path="/__tplvars" element={<TplVarsPreview />} />
             <Route path="/vendas/tutoriais" element={<SalesTutoriais />} />
             <Route path="/vendas/verificar-portfolio" element={<PortfolioVerification />} />
             <Route path="/google-callback" element={<GoogleContactsCallback />} />
