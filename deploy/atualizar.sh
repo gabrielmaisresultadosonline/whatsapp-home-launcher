@@ -456,6 +456,12 @@ if grep -q "Sem depender da UNIQUE(user_id,email)" "$ROOT/supabase/functions/met
 else
   die "Código antigo do OAuth Google ainda está no servidor; confirme o origin e a branch main"
 fi
+if grep -q "Não usar upsert ON CONFLICT (wa_id,user_id)" "$ROOT/supabase/functions/meta-whatsapp-crm/index.ts" \
+  && ! grep -q "upsert(upsertBatch, { onConflict: 'wa_id,user_id' })" "$ROOT/supabase/functions/meta-whatsapp-crm/index.ts"; then
+  echo -e "  Google Contacts import: ${C_G}OK${N} (insert sem conflito legado)"
+else
+  die "Importador Google antigo ainda usa ON CONFLICT (wa_id,user_id)"
+fi
 echo "  frontend aponta  : ${API}"
 
 echo

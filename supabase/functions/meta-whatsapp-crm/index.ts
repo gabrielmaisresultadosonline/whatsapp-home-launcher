@@ -6425,11 +6425,13 @@ async function fetchAndStoreIncomingMedia(
       
       console.log(`[SYNC] Invocando syncGoogleContacts. accountId: ${accountId || 'recente'}`);
       
-       if (accountId) {
-         const { data } = await supabase.from('crm_google_accounts').select('*').eq('id', accountId).eq('user_id', userId).single();
+        if (accountId) {
+          const { data, error: accountError } = await supabase.from('crm_google_accounts').select('*').eq('id', accountId).eq('user_id', userId).single();
+          if (accountError) throw new Error(`Conta Google não encontrada: ${accountError.message}`);
          account = data;
        } else {
-         const { data } = await supabase.from('crm_google_accounts').select('*').eq('user_id', userId).order('updated_at', { ascending: false }).limit(1).single();
+          const { data, error: accountError } = await supabase.from('crm_google_accounts').select('*').eq('user_id', userId).order('updated_at', { ascending: false }).limit(1).single();
+          if (accountError) throw new Error(`Conta Google não encontrada: ${accountError.message}`);
          account = data;
        }
 
@@ -6468,7 +6470,15 @@ async function fetchAndStoreIncomingMedia(
             updated_at: new Date().toISOString()
           }).eq('id', account.id);
         } else {
-          console.error("[SYNC] Falha ao atualizar token:", refreshTokens);
+          const refreshMessage = refreshTokens?.error_description || refreshTokens?.error || `HTTP ${refreshResponse.status}`;
+          console.error("[SYNC] Falha ao atualizar token:", refreshMessage);
+          await supabase.from('crm_google_accounts').update({
+            connection_status: 'reconnect_required',
+            last_sync_error_code: 'TOKEN_REFRESH_FAILED',
+            last_sync_error: String(refreshMessage).slice(0, 500),
+            last_sync_error_at: new Date().toISOString(),
+          }).eq('id', account.id);
+          throw new Error('A autorização do Google expirou. Reconecte a conta e tente novamente.');
         }
       }
 
@@ -6515,8 +6525,15 @@ async function fetchAndStoreIncomingMedia(
         
         if (!contactsResponse.ok) {
           const err = await contactsResponse.json().catch(() => ({}));
-          console.error('[SYNC] People API Error:', err);
-          break;
+          const apiMessage = err?.error?.message || `HTTP ${contactsResponse.status}`;
+          console.error('[SYNC] People API Error:', { status: contactsResponse.status, message: apiMessage });
+          await supabase.from('crm_google_accounts').update({
+            connection_status: contactsResponse.status === 401 || contactsResponse.status === 403 ? 'reconnect_required' : 'error',
+            last_sync_error_code: `PEOPLE_API_${contactsResponse.status}`,
+            last_sync_error: String(apiMessage).slice(0, 500),
+            last_sync_error_at: new Date().toISOString(),
+          }).eq('id', account.id);
+          throw new Error(`Google Contatos recusou a sincronização: ${apiMessage}`);
         }
 
         const contactsData = await contactsResponse.json();
@@ -6560,24 +6577,44 @@ async function fetchAndStoreIncomingMedia(
                 name: name || null,
                 google_sync_account_id: account.id,
                 user_id: userId,
+                source_type: 'google',
                 updated_at: new Date().toISOString()
               });
             }
           }
 
           if (upsertBatch.length > 0) {
-            console.log(`[SYNC] Tentando upsert de batch com ${upsertBatch.length} registros únicos...`);
-            const { error: upsertError } = await supabase.from('crm_contacts').upsert(upsertBatch, { onConflict: 'wa_id,user_id' });
-            if (!upsertError) {
-              count += upsertBatch.length;
-            } else {
-              console.error('[SYNC] Upsert Error:', upsertError);
+            // Não usar upsert ON CONFLICT (wa_id,user_id): essa constraint foi
+            // removida pela migration 089 para permitir o mesmo contato em
+            // caixas WhatsApp diferentes. O conjunto canônico acima elimina
+            // existentes e duplicados antes da inserção.
+            console.log(`[SYNC] Inserindo lote com ${upsertBatch.length} registros únicos...`);
+            const { error: insertError } = await supabase.from('crm_contacts').insert(upsertBatch);
+            if (insertError) {
+              console.error('[SYNC] Insert Error:', insertError);
+              await supabase.from('crm_google_accounts').update({
+                connection_status: 'error',
+                last_sync_error_code: insertError.code || 'CONTACT_INSERT_FAILED',
+                last_sync_error: String(insertError.message || insertError).slice(0, 500),
+                last_sync_error_at: new Date().toISOString(),
+              }).eq('id', account.id);
+              throw new Error(`Não foi possível gravar os contatos Google: ${insertError.message}`);
             }
+            for (const inserted of upsertBatch) existingCanonWaIds.add(inserted.wa_id);
+            count += upsertBatch.length;
           }
         }
       } while (nextPageToken);
 
       console.log(`[SYNC] Finalizado. Total de conexões People API: ${totalFetched}. Total de registros/upserts em crm_contacts: ${count}`);
+
+      await supabase.from('crm_google_accounts').update({
+        connection_status: 'active',
+        last_sync_error_code: null,
+        last_sync_error: null,
+        last_sync_error_at: null,
+        updated_at: new Date().toISOString(),
+      }).eq('id', account.id);
 
       return new Response(JSON.stringify({ success: true, count, totalFetched }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },

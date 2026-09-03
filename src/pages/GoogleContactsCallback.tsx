@@ -31,10 +31,14 @@ const GoogleContactsCallback = () => {
           if (!invokeError && data?.success) {
             console.log("Sucesso ao trocar código, iniciando sincronização...");
             // Agora que a conta está salva, dispara a sincronização automática
+            const connectedAccountId = typeof data?.account?.id === 'string' ? data.account.id : undefined;
             const { data: syncData, error: syncError } = await supabase.functions.invoke('meta-whatsapp-crm', {
-              body: { action: 'syncGoogleContacts' }
+              body: { action: 'syncGoogleContacts', accountId: connectedAccountId }
             });
             console.log("Resultado da sincronização automática:", { syncData, syncError });
+            if (syncError || !syncData?.success) {
+              throw new Error(syncError?.message || syncData?.error || 'A conta conectou, mas os contatos não puderam ser importados.');
+            }
           }
 
         if (invokeError || !data?.success) {
