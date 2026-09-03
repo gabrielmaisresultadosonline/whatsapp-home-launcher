@@ -14,4 +14,4 @@
 - [x] Google Contatos: ligar a importação ao botão da conta, não mascarar erros como 0/0 e registrar exportações no diagnóstico.
 - [x] Google Contatos: corrigir o botão genérico para importar e separar pendentes globais/por cadastro no diagnóstico.
 
-- [ ] Agente IA: organizador Kanban automático, opção de resposta agrupada e correções completas da sincronização Google.
+- [x] Agente IA: organizador Kanban automático, opção de resposta agrupada e correções completas da sincronização Google.

@@ -274,6 +274,9 @@ else
     if [ "$nome" = "094-google-accounts-unique.sql" ]; then
       graves="${erros:-0}"
     fi
+    if [ "$nome" = "095-ai-agent-kanban-and-whatsapp-primary.sql" ]; then
+      graves="${erros:-0}"
+    fi
     if [ "${erros:-0}" -gt 0 ]; then
       warn "  ${erros} aviso(s)/erro(s) em $nome → /tmp/zapmro-sql-$nome.log"
       grep -iE '^psql:.*(ERROR|FATAL)' "/tmp/zapmro-sql-$nome.log" | sort -u | head -3 | sed 's/^/      /' || true
@@ -450,6 +453,13 @@ if [ "$google_unique" = "1" ]; then
   echo -e "  Google OAuth UNIQUE   : ${C_G}OK${N} (user_id, email)"
 else
   die "Migration 094 não criou UNIQUE(user_id, email). Veja /tmp/zapmro-sql-094-google-accounts-unique.sql.log"
+fi
+google_primary_column="$(q "select count(*) from information_schema.columns where table_schema='public' and table_name='crm_whatsapp_numbers' and column_name='is_primary'")"
+ai_preferences_columns="$(q "select count(*) from information_schema.columns where table_schema='public' and table_name='crm_settings' and column_name in ('ai_kanban_auto_organizer','ai_send_bundled')")"
+if [ "$google_primary_column" = "1" ] && [ "$ai_preferences_columns" = "2" ]; then
+  echo -e "  Migration 095         : ${C_G}OK${N} (WhatsApp principal + preferências IA)"
+else
+  die "Migration 095 incompleta. Veja /tmp/zapmro-sql-095-ai-agent-kanban-and-whatsapp-primary.sql.log"
 fi
 if grep -q "Sem depender da UNIQUE(user_id,email)" "$ROOT/supabase/functions/meta-whatsapp-crm/index.ts"; then
   echo -e "  Google OAuth function : ${C_G}OK${N} (update/insert sem ON CONFLICT)"
