@@ -957,8 +957,8 @@ ${aiPrompt}
               ai_active: false
             };
             
-            if (labelOnTransfer) {
-              updateData.status = labelOnTransfer;
+            if (labelOnTransfer || aiSettings?.ai_kanban_auto_organizer) {
+              updateData.status = labelOnTransfer || AI_KANBAN_DEFINITIONS.humano.value;
             }
             
             await supabase.from('crm_contacts').update(updateData).eq('id', contact.id);
@@ -971,7 +971,7 @@ ${aiPrompt}
       await supabase.from('crm_contacts').update({ 
         flow_state: 'idle', 
         ai_active: false,
-        status: labelOnTransfer || 'human',
+        status: labelOnTransfer || (aiSettings?.ai_kanban_auto_organizer ? AI_KANBAN_DEFINITIONS.humano.value : 'human'),
         current_flow_id: null,
         current_node_id: null,
         next_execution_time: null
