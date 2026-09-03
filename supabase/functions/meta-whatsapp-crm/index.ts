@@ -6098,7 +6098,7 @@ async function fetchAndStoreIncomingMedia(
         to, 
         templateName, 
         languageCode || 'pt_BR', 
-        manualComponents, 
+        manualComponents || [], 
         { ...contact, whatsapp_number_id: contact.whatsapp_number_id || templateNumberId || null },
         null,
         providedContactId,
